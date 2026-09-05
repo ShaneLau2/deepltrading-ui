@@ -36,6 +36,10 @@ async function tryFetchToken() {
     if (j && j.token && /^[A-Za-z0-9_\-]+$/.test(j.token)) {
       API_TOKEN = j.token;
       try { localStorage.setItem("dl_apiToken", j.token); } catch (_) {}
+      const tst = document.getElementById("tokenSt");
+      if (tst) tst.textContent = "✓ token 已配置";
+      const tin = document.getElementById("tokenIn");
+      if (tin) tin.placeholder = "已配置, 留空则不变";
     }
     return (j && j.token) || null;
   } catch (_) { return null; }
