@@ -78,11 +78,15 @@ function renderApiBaseBox() {
     });
   }
   document.getElementById("tokenSave").addEventListener("click", () => {
-    const v = document.getElementById("tokenIn").value.trim();
+    let v = document.getElementById("tokenIn").value.trim();
     if (!v) return;
-    if (!/^[A-Za-z0-9_\-]+$/.test(v)) {   // 非 ASCII 会直接让 fetch 抛错(Headers 限制)
+    // 容忍粘贴 curl 响应({"token":"…"})或 “Bearer …” 等包装: 提取 token 主体;
+    // 服务端 token 恒为 43 位 [A-Za-z0-9_-], 提取不到即输入本身有问题。
+    const m = v.match(/[A-Za-z0-9_\-]{16,}/);
+    v = m ? m[0] : "";
+    if (!v) {
       const tst = document.getElementById("tokenSt");
-      if (tst) tst.textContent = "✗ token 无效(只能含字母/数字/-/_)";
+      if (tst) tst.textContent = "✗ token 无效(只能含字母/数字/-/_, 或粘贴本机获取/curl 的完整输出)";
       return;
     }
     API_TOKEN = v;
