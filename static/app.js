@@ -63,7 +63,11 @@ function renderApiBaseBox() {
   const apiBtn = document.getElementById("apiBaseBtn");
   if (apiBtn) {
     const st = document.getElementById("apiBaseSt");
-    probeBackend(API_BASE || "http://127.0.0.1:8766").then(ok => { if (st) st.textContent = ok ? "✓ 已连接" : "✗ 不可达"; });
+    probeBackend(API_BASE || "http://127.0.0.1:8766").then(ok => {
+      if (!st) return;
+      st.textContent = ok ? "✓ 已连接"
+        : (local ? "✗ 不可达" : "✗ 不可达(Chrome 若弹「允许访问本地网络」请点允许)");
+    });
     apiBtn.addEventListener("click", () => {
       const v = document.getElementById("apiBaseIn").value.trim().replace(/\/+$/, "");
       try { localStorage.setItem("dl_apiBase", v); } catch (_) {}
