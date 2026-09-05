@@ -16,12 +16,31 @@ const API_BASE = (() => {
   try { return (localStorage.getItem("dl_apiBase") || "").trim().replace(/\/+$/, ""); } catch (_) { return ""; }
 })();
 
+/* API token 鉴权(2026-09-06): 除 /api/auth/* 外所有接口都要 Bearer token。
+   localStorage 按 origin 隔离——本机页自动获取; 公网页(GitHub Pages)拿不到,
+   需手动把本机页显示的 token 粘贴到页头。 */
+let API_TOKEN = (() => { try { return localStorage.getItem("dl_apiToken") || ""; } catch (_) { return ""; } })();
+
+async function tryFetchToken() {
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(location.origin)) return null;
+  try {
+    const r = await fetch(API_BASE + "/api/auth/token", { cache: "no-store" });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (j && j.token) {
+      API_TOKEN = j.token;
+      try { localStorage.setItem("dl_apiToken", j.token); } catch (_) {}
+    }
+    return (j && j.token) || null;
+  } catch (_) { return null; }
+}
+
 async function probeBackend(base) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 2000);
   try {
     const r = await fetch(base + "/api/signals/status", { signal: ctl.signal, cache: "no-store" });
-    return r.ok;
+    return r.ok || r.status === 401;   // 401 = 后端在线但缺 token, 也算可达
   } catch (_) { return false; } finally { clearTimeout(t); }
 }
 
@@ -29,20 +48,46 @@ function renderApiBaseBox() {
   const box = document.getElementById("apiBaseBox");
   if (!box) return;
   const local = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(location.origin);
-  if (local && !API_BASE) {
-    box.textContent = "本机直连 ✓";
-    box.title = "页面由本机后端直接提供,无需配置";
-    return;
+  const btnSt = "font-size:11px;padding:2px 8px;margin-left:4px;cursor:pointer;border-radius:6px;border:1px solid #3a4152;background:#1c2233;color:#cbd5e1";
+  const inpSt = "width:150px;font-size:11px;padding:2px 6px;border:1px solid #3a4152;border-radius:6px;background:#141824;color:#cbd5e1";
+  const backendRow = (local && !API_BASE)
+    ? `<span>本机直连 ✓</span>`
+    : `<input id="apiBaseIn" type="text" placeholder="http://127.0.0.1:8766" value="${esc(API_BASE)}" style="${inpSt}">`
+      + `<button id="apiBaseBtn" style="${btnSt}">连接</button>`
+      + `<span id="apiBaseSt" style="font-size:11px;margin-left:4px">…检测中</span>`;
+  box.innerHTML = `<div>${backendRow}</div>`
+    + `<div style="margin-top:4px"><input id="tokenIn" type="password" placeholder="${API_TOKEN ? "已配置, 留空则不变" : "API token"}" style="${inpSt}">`
+    + `<button id="tokenSave" style="${btnSt}">保存</button>`
+    + (local ? `<button id="tokenFetch" title="仅本机页面可用: 从后端获取当前 token 填入" style="${btnSt}">本机获取</button>` : "")
+    + `<span id="tokenSt" style="font-size:11px;margin-left:4px">${API_TOKEN ? "✓ token 已配置" : "✗ 未配置"}</span></div>`;
+  const apiBtn = document.getElementById("apiBaseBtn");
+  if (apiBtn) {
+    const st = document.getElementById("apiBaseSt");
+    probeBackend(API_BASE || "http://127.0.0.1:8766").then(ok => { if (st) st.textContent = ok ? "✓ 已连接" : "✗ 不可达"; });
+    apiBtn.addEventListener("click", () => {
+      const v = document.getElementById("apiBaseIn").value.trim().replace(/\/+$/, "");
+      try { localStorage.setItem("dl_apiBase", v); } catch (_) {}
+      location.reload();
+    });
   }
-  box.innerHTML = `<input id="apiBaseIn" type="text" placeholder="http://127.0.0.1:8766" value="${esc(API_BASE)}" style="width:150px;font-size:11px;padding:2px 6px;border:1px solid #3a4152;border-radius:6px;background:#141824;color:#cbd5e1">`
-    + `<button id="apiBaseBtn" style="font-size:11px;padding:2px 8px;margin-left:4px;cursor:pointer;border-radius:6px;border:1px solid #3a4152;background:#1c2233;color:#cbd5e1">连接</button>`
-    + `<span id="apiBaseSt" style="font-size:11px;margin-left:4px">…检测中</span>`;
-  const st = document.getElementById("apiBaseSt");
-  probeBackend(API_BASE || "http://127.0.0.1:8766").then(ok => { st.textContent = ok ? "✓ 已连接" : "✗ 不可达"; });
-  document.getElementById("apiBaseBtn").addEventListener("click", () => {
-    const v = document.getElementById("apiBaseIn").value.trim().replace(/\/+$/, "");
-    try { localStorage.setItem("dl_apiBase", v); } catch (_) {}
+  document.getElementById("tokenSave").addEventListener("click", () => {
+    const v = document.getElementById("tokenIn").value.trim();
+    if (!v) return;
+    API_TOKEN = v;
+    try { localStorage.setItem("dl_apiToken", v); } catch (_) {}
+    const tst = document.getElementById("tokenSt");
+    if (tst) tst.textContent = "✓ 已保存, 重载中…";
     location.reload();
+  });
+  const tf = document.getElementById("tokenFetch");
+  if (tf) tf.addEventListener("click", async () => {
+    const tst = document.getElementById("tokenSt");
+    if (tst) tst.textContent = "获取中…";
+    const tok = await tryFetchToken();
+    if (tok) {
+      document.getElementById("tokenIn").value = tok;
+      if (tst) tst.textContent = "✓ 已填入, 点「保存」生效";
+    } else if (tst) tst.textContent = "✗ 获取失败(仅本机页面可获取)";
   });
 }
 
@@ -61,9 +106,17 @@ function renderApiBaseBox() {
 
 /* ── 工具 ─────────────────────────────────────────────────────────── */
 async function api(path, opts = {}) {
-  const res = await fetch(API_BASE + path, Object.assign({
-    headers: { "Content-Type": "application/json" },
-  }, opts));
+  const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
+  if (API_TOKEN) headers["Authorization"] = "Bearer " + API_TOKEN;
+  let res = await fetch(API_BASE + path, Object.assign({}, opts, { headers }));
+  if (res.status === 401 && !opts._authed) {
+    // 本机页面: 401 时自动取 token 重试一次; 公网页取不到, 走下方报错提示
+    const tok = await tryFetchToken();
+    if (tok) {
+      headers["Authorization"] = "Bearer " + tok;
+      res = await fetch(API_BASE + path, Object.assign({}, opts, { headers }));
+    }
+  }
   if (!res.ok) {
     let detail = res.status + " " + res.statusText;
     try { const j = await res.json(); detail = j.detail || detail; } catch (_) {}
@@ -372,7 +425,7 @@ async function renderOverview() {
 /* 导出验证证据链快照(MD/HTML),数据来自 /api/overview/validation-snapshot(全本地文件) */
 async function exportValidationSnapshot(fmt) {
   try {
-    const r = await fetch(API_BASE + "/api/overview/validation-snapshot?format=" + fmt, { cache: "no-store" });
+    const r = await fetch(API_BASE + "/api/overview/validation-snapshot?format=" + fmt, { cache: "no-store", headers: API_TOKEN ? { Authorization: "Bearer " + API_TOKEN } : {} });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const text = await r.text();
     const ext = fmt === "html" ? "html" : "md";
