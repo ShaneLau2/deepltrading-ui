@@ -24,9 +24,11 @@ const _esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 const _IS_LOCAL = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(location.origin);
+/* 唯一被信任的公网来源: 用户自己的 GitHub Pages 域名(服务端同源校验, 见 web/app.py) */
+const _PAGES_ORIGIN = "https://shanelau2.github.io";
 
 async function tryFetchToken() {
-  if (!_IS_LOCAL) return null;
+  if (!_IS_LOCAL && location.origin !== _PAGES_ORIGIN) return null;
   try {
     const r = await fetch(API_BASE + "/api/auth/token", { cache: "no-store" });
     if (!r.ok) return null;
@@ -61,7 +63,7 @@ function renderApiBaseBox() {
   box.innerHTML = `<div>${backendRow}</div>`
     + `<div style="margin-top:4px"><input id="tokenIn" type="password" placeholder="${API_TOKEN ? "已配置, 留空则不变" : "API token"}" style="${inpSt}">`
     + `<button id="tokenSave" style="${btnSt}">保存</button>`
-    + (_IS_LOCAL ? `<button id="tokenFetch" title="仅本机页面可用: 从后端获取当前 token 填入" style="${btnSt}">本机获取</button>` : "")
+    + (_IS_LOCAL || location.origin === _PAGES_ORIGIN ? `<button id="tokenFetch" title="从后端获取当前 token 填入" style="${btnSt}">本机获取</button>` : "")
     + `<span id="tokenSt" style="font-size:11px;margin-left:4px">${API_TOKEN ? "✓ token 已配置" : "✗ 未配置"}</span></div>`;
   const apiBtn = document.getElementById("apiBaseBtn");
   if (apiBtn) {
