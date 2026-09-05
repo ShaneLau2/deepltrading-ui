@@ -91,8 +91,10 @@ function renderApiBaseBox() {
   });
 }
 
-/* 远端页面(GitHub Pages)自动探测本机后端: 命中即持久化并重载, 每会话一次 */
-(async function ensureBackend() {
+/* 远端页面(GitHub Pages)自动探测本机后端: 命中即持久化并重载, 每会话一次。
+   注意: 不能在此处立即调用——renderApiBaseBox 用到 const esc(文件后半段才初始化),
+   立即调用会 TDZ 报错(页面完全打不开后端框); 真正的调用放在文件末尾 boot 之前。 */
+async function ensureBackend() {
   renderApiBaseBox();
   if (API_BASE) return;
   if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(location.origin)) return;
@@ -102,7 +104,7 @@ function renderApiBaseBox() {
     try { localStorage.setItem("dl_apiBase", "http://127.0.0.1:8766"); } catch (_) {}
     location.reload();
   }
-})();
+}
 
 /* ── 工具 ─────────────────────────────────────────────────────────── */
 async function api(path, opts = {}) {
@@ -2563,6 +2565,8 @@ function closePxModal() {
 document.querySelectorAll(".step").forEach(s => s.addEventListener("click", () => showPage(s.dataset.page)));
 let bootPage = "overview";
 try { bootPage = localStorage.getItem("dl_web_page") || "overview"; } catch (_) {}
+// 所有顶层 const 已就绪, 再启动后端连接(渲染后端/token 框 + 远端自动探测)
+ensureBackend();
 showPage(bootPage);
 
 (function wirePxModal() {
