@@ -1519,7 +1519,10 @@ async function renderPaper() {
     tile("账户净值", "$" + fmtMoney(st.equity), st.initialized ? `初始 $${fmtMoney(st.starting_balance)}` : "未初始化", st.initialized ? "green" : "amber"),
     tile("现金", "$" + fmtMoney(st.cash), st.initialized ? `最后结算 ${esc(st.last_settle || "—")}` : "", ""),
     tile("持仓市值", "$" + fmtMoney(st.positions_value), `${esc(st.n_positions)} 个持仓`, ""),
-    tile("已实现盈亏", "$" + fmtMoney(st.realized_pnl), "", st.realized_pnl >= 0 ? "green" : "red"),
+    tile("已实现盈亏(模拟)", "$" + fmtMoney(st.realized_pnl), "模拟账户自身卖出(web/paper_data/trades.csv)", st.realized_pnl >= 0 ? "green" : "red"),
+    tile("已实现盈亏(真实)", st.real_account && st.real_account.available ? "$" + fmtMoney(st.real_account.total) : "—",
+      st.real_account && st.real_account.available ? `真实台账 data/sales.csv · ${st.real_account.n} 笔 · 胜率 ${st.real_account.win_rate != null ? fmtP(st.real_account.win_rate, 0) : "—"}` : (st.real_account && st.real_account.message) || "",
+      st.real_account && st.real_account.available ? (st.real_account.total >= 0 ? "green" : "red") : ""),
   ];
 
   let html = `<div class="grid tiles">${tiles.join("")}</div>
@@ -1544,7 +1547,8 @@ async function renderPaper() {
   <div class="grid two">
     <div class="card"><h3>持仓</h3><div id="ppPos"></div></div>
     <div class="card"><h3>成交流水(最近 50 笔)</h3><div id="ppTrades"></div></div>
-  </div>`;
+  </div>
+  <div class="card"><h3>真实账户卖出台账(data/sales.csv · src/sales_book.py 记账)</h3><div id="ppRealLedger"></div></div>`;
 
   el.innerHTML = html;
 
@@ -1570,6 +1574,14 @@ async function renderPaper() {
     trEl.innerHTML = `<table class="grid-tbl"><thead><tr><th>日期</th><th>代码</th><th>方向</th><th>数量</th><th>价格</th><th>盈亏</th><th>原因</th></tr></thead><tbody>${
       st.trades.slice().reverse().map(t => `<tr><td>${esc(t.date)}</td><td><b>${esc(t.symbol)}</b></td><td>${t.side === "buy" ? "买" : "卖"}</td><td>${esc(t.qty)}</td><td>${fmt(t.price, 2)}</td><td>${t.side === "sell" ? fmtMoney(t.pnl) : "—"}</td><td>${esc(t.reason)}</td></tr>`).join("")}</tbody></table>`;
   } else trEl.innerHTML = `<p class="dim">暂无成交</p>`;
+
+  const rlEl = document.getElementById("ppRealLedger");
+  if (st.real_account && st.real_account.available && st.real_account.rows && st.real_account.rows.length) {
+    rlEl.innerHTML = `<table class="grid-tbl"><thead><tr><th>卖出日</th><th>代码</th><th>卖出价</th><th>数量</th><th>入场日</th><th>入场价</th><th>盈亏$</th><th>盈亏%</th><th>备注</th></tr></thead><tbody>${
+      st.real_account.rows.map(r => `<tr><td>${esc(r.sell_date)}</td><td><b>${esc(r.symbol)}</b></td><td>${fmt(r.sell_price, 2)}</td><td>${esc(r.qty)}</td><td>${esc(r.entry_date)}</td><td>${fmt(r.entry_price, 2)}</td><td>${r.realized_pnl >= 0 ? "+" : ""}${fmtMoney(r.realized_pnl)}</td><td>${r.realized_pct != null ? fmtPct(r.realized_pct) : "—"}</td><td>${esc(r.note)}</td></tr>`).join("")}</tbody></table>`;
+  } else {
+    rlEl.innerHTML = `<p class="dim">${esc((st.real_account && st.real_account.message) || "暂无卖出记录")}</p>`;
+  }
   pollSet("hdr", pollHeader, 4000);
 }
 
