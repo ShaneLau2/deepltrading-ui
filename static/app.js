@@ -712,6 +712,7 @@ function panoramaSection(panoSt, panoRep) {
       <label>DD 门控 <input id="panoDd" placeholder="如 0.08" value="0.08"></label>
       <label>折6窗口月数 <input id="panoMonths" type="number" value="6" min="3" max="12"></label>
       <label>参考折6 Sharpe <input id="panoRef" placeholder="留空=ATR 绝对阈值" value=""></label>
+      <label class="chk"><input id="panoV2" type="checkbox" title="生产口径 V2 风控(DD阶梯×IC): ①champion ②canonical 生效;③unified 自带 DD8 门控,不叠加"> 叠加 V2 风控(DD阶梯×IC,生产口径)</label>
     </div>
     <div class="btn-row">
       <button class="btn primary" onclick="startPanorama()">运行全景 OOS</button>
@@ -750,7 +751,8 @@ async function startPanorama() {
       atr_mult: $("#panoAtr").value || null,
       dd_thresh: $("#panoDd").value || null,
       months: parseInt($("#panoMonths").value, 10) || 6,
-      ref_oos_sharpe: $("#panoRef").value || null }) });
+      ref_oos_sharpe: $("#panoRef").value || null,
+      v2: $("#panoV2") ? $("#panoV2").checked : false }) });
     toast(`全景 OOS 已启动(Top${r.k})`);
     renderBacktest();
   } catch (e) { toast(e.message, false); }
@@ -767,28 +769,45 @@ async function loadPanoReport() {
     if (!box || !r.available || !r.report || !r.report.panorama) return;
     const rep = r.report;
     const p = rep.params || {};
-    let html = `<div class="card"><h3>全景对比(${esc(p.full_start)} → ${esc(p.full_end)} · 折6起点 ${esc(p.oos_cut)} · ${esc(p.oos_days)} 天)</h3>
-      <table class="grid-tbl"><thead><tr><th>引擎</th><th>全窗 Sharpe</th><th>全窗 MDD</th><th>全窗累计</th><th>折6 Sharpe</th><th>折6 MDD</th><th>折6累计</th><th>ratio</th><th>判定</th></tr></thead><tbody>`;
+    const anyV2 = (rep.engines || []).some(e => e.v2);
+    let html = `<div class="card"><h3>全景对比(${esc(p.full_start)} → ${esc(p.full_end)} · 折6起点 ${esc(p.oos_cut)} · ${esc(p.oos_days)} 天${p.v2 ? " · 叠加 V2 风控(生产口径)" : ""})</h3>
+      <table class="grid-tbl"><thead><tr><th>引擎</th><th>全窗 Sharpe</th><th>全窗 MDD</th><th>全窗累计</th><th>折6 Sharpe</th><th>折6 MDD</th><th>折6累计</th>${anyV2 ? `<th>V2 暴露(均/末)</th>` : ""}<th>ratio</th><th>判定</th></tr></thead><tbody>`;
     for (const e of rep.engines || []) {
       const verdictCls = e.fitted ? "red" : "green";
       html += `<tr><td><b>${esc(e.label)}</b></td>
         <td>${fmt(e.full.sharpe, 2)}</td><td>${fmtPct(e.full.mdd)}</td><td>${fmtPct(e.full.cum, 0)}</td>
         <td>${fmt(e.oos.sharpe, 2)}</td><td>${fmtPct(e.oos.mdd)}</td><td>${fmtPct(e.oos.cum, 0)}</td>
+        ${anyV2 ? `<td>${e.v2 ? fmtP(e.v2.mean_exposure, 0) + " / " + fmtP(e.v2.last_exposure, 0) + (e.v2.ic_fallback ? " ⚠IC回退" : "") : `<span class="dim">自带门控</span>`}</td>` : ""}
         <td>${fmt(e.ratio, 2)}</td><td class="${verdictCls}">${esc(e.verdict)}</td></tr>`;
     }
     html += `</tbody></table>
-      <p class="dim">判定规则(dual_validate): 全窗口Sharpe / 折6Sharpe > 1.4 → 疑似拟合;引擎间差异来自成本模型/退出规则/门控实现,并排对照可定位口径偏差。</p></div>`;
+      <p class="dim">判定规则(dual_validate): 全窗口Sharpe / 折6Sharpe > 1.4 → 疑似拟合;引擎间差异来自成本模型/退出规则/门控实现,并排对照可定位口径偏差。${p.v2 ? "V2 覆盖 = 裸引擎日收益 × 生产 DD阶梯×IC 复合暴露(risk_control_v2,与单回测 --v2 同源);③unified 自带 DD8 门控不叠加。" : ""}</p></div>`;
     const first = (rep.engines || [])[0];
     if (first && first.full) {
-      html += `<div class="card"><h3>各引擎全窗口资金曲线</h3><canvas id="panoEquity"></canvas></div>`;
+      html += `<div class="card"><h3>各引擎资金曲线(实线=全窗口 · 虚线=OOS 窗口,起点归 1)</h3>
+        <p class="dim" style="margin:0">OOS 窗口 = 折6起点 ${esc(p.oos_cut || "")} 之后(${esc(p.oos_days || "")} 天);虚线各自从 1.0 起算,比较的是 OOS 段的斜率与形态,不是绝对水平(全窗线到该时点已是累计净值)。</p>
+        <canvas id="panoEquity"></canvas></div>`;
     }
     box.innerHTML = html;
     const cv = rep.curves || {};
     const keys = Object.keys(cv);
     if (keys.length) {
+      // 共享日期轴: 全部曲线按日期对齐(缺失日期补 null)
+      const allDates = [...new Set(keys.flatMap(k => cv[k].map(p => p.date)))].sort();
+      const idxOf = {}; allDates.forEach((d, i) => { idxOf[d] = i; });
+      const align = arr => { const out = new Array(allDates.length).fill(null); arr.forEach(p => { out[idxOf[p.date]] = p.eq; }); return out; };
       const palette = ["#4ade80", "#fbbf24", "#60a5fa"];
-      const ds = keys.map((k, i) => ({ label: k, data: cv[k].map(p => p.eq), borderColor: palette[i % 3], pointRadius: 0, borderWidth: 1.5 }));
-      chart("panoEquity", { type: "line", data: { labels: cv[keys[0]].map(p => p.date), datasets: ds },
+      const colorOf = {}; let ci = 0;
+      const ds = [];
+      for (const k of keys) {
+        const base = k.replace(/_oos$/, "");
+        if (!(base in colorOf)) colorOf[base] = palette[ci++ % palette.length];
+        const isOos = k.endsWith("_oos");
+        ds.push({ label: isOos ? base + " · OOS" : base + " · 全窗",
+          data: align(cv[k]), borderColor: colorOf[base],
+          borderDash: isOos ? [6, 4] : [], pointRadius: 0, borderWidth: 1.5, spanGaps: false });
+      }
+      chart("panoEquity", { type: "line", data: { labels: allDates, datasets: ds },
         options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
           plugins: { legend: { labels: CHART_STYLE } },
           scales: { x: { grid: CHART_STYLE.grid, ticks: { color: "#8a94a8", maxTicksLimit: 10 } }, y: { grid: CHART_STYLE.grid, ticks: CHART_STYLE.ticks } } } });
