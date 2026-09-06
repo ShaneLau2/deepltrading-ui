@@ -191,6 +191,17 @@ input[type="checkbox"] { accent-color: var(--blue); width: 15px; height: 15px; }
   max-height: 320px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
 }
 
+/* ── 日志查看器(07 运行日志) ── */
+.log-line { display: flex; gap: 10px; padding: 0 2px; }
+.log-line .ln {
+  flex: 0 0 64px; text-align: right; color: #4a5878; user-select: none;
+  font-size: 10.5px; line-height: 1.7;
+}
+.log-line.log-err { background: rgba(239, 68, 68, 0.14); color: #fda4af; }
+.log-line.log-warn { background: rgba(251, 191, 36, 0.10); color: #fde68a; }
+.log-line.log-err .ln { color: #f87171; }
+.log-line.log-warn .ln { color: #fbbf24; }
+
 /* ── 状态条 / 提示 ── */
 .busy-bar {
   display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 12px;

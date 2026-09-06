@@ -71,7 +71,7 @@ function showPage(name) {
   try { localStorage.setItem("dl_web_page", name); } catch (_) {}
   document.querySelectorAll(".step").forEach(s => s.classList.toggle("active", s.dataset.page === name));
   document.querySelectorAll(".page").forEach(s => s.classList.toggle("active", s.dataset.page === name));
-  const renderers = { overview: renderOverview, train: renderTrain, backtest: renderBacktest, signals: renderSignals, paper: renderPaper, evolve: renderEvolve, pipeline: renderPipeline };
+  const renderers = { overview: renderOverview, train: renderTrain, backtest: renderBacktest, signals: renderSignals, paper: renderPaper, evolve: renderEvolve, pipeline: renderPipeline, logs: renderLogs };
   renderers[name]();
 }
 
@@ -462,6 +462,7 @@ async function renderTrain() {
         <option value="expanding">expanding · 全历史</option>
         <option value="sliding-730">sliding-730 · 最近2年(日历日)</option>
         <option value="sliding-500d">sliding-500d · 最近500交易日</option></select></label>
+      <label>留出测试集(月) <input id="trHoldout" type="number" min="0" max="36" value="0" title="把窗口末尾 N 个月作为真测试集: 训练时完全不可见,训练后自动评估并写入 holdout_report.json(逐日 IC/t + Top30 Sharpe)。0=不启用(全量训练)。"></label>
       <label>输出目录标签 <input id="trTag" placeholder="留空自动生成"></label>
       <label class="chk"><input id="trRebuild" type="checkbox"> 先重建数据集(吸收最新行情)</label>
       <label class="chk" id="trReviewedLbl"><input id="trReviewed" type="checkbox"> 叠加该角色已复核特征(--add-cols: 挖到新特征→训练该标签集)</label>
@@ -508,18 +509,22 @@ async function renderTrain() {
 
   // 实验模型 + 部署
   html += `<div class="card"><h3>实验模型(models_experiment/)</h3>
-    <table class="grid-tbl"><thead><tr><th>标签</th><th>特征集</th><th>特征数</th><th>训练区间</th><th>文件</th><th>操作</th></tr></thead><tbody>`;
+    <table class="grid-tbl"><thead><tr><th>标签</th><th>特征集</th><th>特征数</th><th>训练区间</th><th>留出测试 IC(60d)</th><th>留出测试 Sharpe</th><th>文件</th><th>操作</th></tr></thead><tbody>`;
   const exps = models.experiments || [];
-  if (!exps.length) html += `<tr><td colspan="6" class="dim">暂无实验模型</td></tr>`;
+  if (!exps.length) html += `<tr><td colspan="8" class="dim">暂无实验模型</td></tr>`;
   for (const e of exps) {
     const c = e.config || {};
+    const ho = (e.holdout && e.holdout.horizons && e.holdout.horizons["60"]) || null;
+    const hoRange = e.holdout && e.holdout.test_range ? ` (${esc(e.holdout.test_range.join(" → "))})` : "";
     html += `<tr><td><b>${esc(e.tag)}</b></td><td>${esc(c.feat_set || "—")}</td><td>${esc(c.n_features ?? "—")}</td>
       <td>${esc(c.date_min || "—")} → ${esc(c.date_max || "—")}</td>
+      <td title="留出测试集${hoRange}">${ho ? `<b>${fmt(ho.ic, 4)}</b><span class="dim"> (t ${fmt(ho.ic_t, 1)})</span>` : "—"}</td>
+      <td>${ho ? `<b>${fmt(ho.sharpe, 2)}</b>` : "—"}</td>
       <td>${esc(e.files.map(f => f.name).join(", "))}</td>
       <td><button class="btn small" onclick="deployExp('${esc(e.tag)}')">部署到生产</button></td></tr>`;
   }
   html += `</tbody></table>
-    <p class="dim">部署会先备份 models/ 到 models_backup_web_&lt;时间&gt;/,且需二次确认(违反冻结规则)。</p></div>`;
+    <p class="dim">留出测试 = 训练窗口末尾 N 个月(训练不可见)的 ens_60 逐日秩相关 IC 与 Top30 标签均值年化 Sharpe(信号代理,非真实回测)。部署会先备份 models/ 到 models_backup_web_&lt;时间&gt;/,且需二次确认(违反冻结规则)。</p></div>`;
 
   // 6折样本外 + OOS 冻结卡片
   html += validateSection(vst);
@@ -531,6 +536,7 @@ async function renderTrain() {
   document.getElementById("trFeat").value = s.train_feat_set || "swing";
   document.getElementById("trEpochs").value = s.train_epochs || 40;
   document.getElementById("trWindow").value = s.train_window || "expanding";
+  document.getElementById("trHoldout").value = s.train_holdout || 0;
   document.getElementById("trRebuild").checked = !!s.train_rebuild;
   const trv = document.getElementById("trReviewed");
   if (trv) trv.checked = !!s.train_reviewed;
@@ -568,6 +574,8 @@ function onModelTypeChange() {
   feat.closest("label").style.display = showFeat ? "" : "none";
   epochs.closest("label").style.display = showEpochs ? "" : "none";
   win.closest("label").style.display = showWin ? "" : "none";
+  const hol = document.getElementById("trHoldout");
+  if (hol) hol.closest("label").style.display = showWin ? "" : "none";
   const rl = document.getElementById("trReviewedLbl");
   if (rl) rl.style.display = showReviewed ? "" : "none";
 }
@@ -577,6 +585,7 @@ async function startTrain() {
       model_type: $("#trModelType").value,
       feat_set: $("#trFeat").value, epochs: parseInt($("#trEpochs").value, 10) || 40,
       train_window: $("#trWindow").value,
+      holdout_months: parseInt($("#trHoldout").value, 10) || 0,
       rebuild_dataset: $("#trRebuild").checked, out_tag: $("#trTag").value,
       reviewed: $("#trReviewed") ? $("#trReviewed").checked : false }) });
     toast(`训练已启动: ${r.model_label || r.feat_label} → ${r.out_dir}`);
@@ -1910,6 +1919,7 @@ function batchTrainCard(s, mt) {
     <p class="dim">★=生产冠军特征集(swing·33)。逐项顺序训练(与单跑同一任务槽),每项输出 models_experiment/batch_&lt;ts&gt;/NN_&lt;model&gt;_&lt;feat&gt;/;完成后按折6样本外指标自动排序对比。</p>
     <div class="form-grid inline">
       <label>Epochs <input id="batchEpochs" type="number" value="${s.batch_epochs || 40}" min="1" max="200"></label>
+      <label>留出测试集(月) <input id="batchHoldout" type="number" min="0" max="36" value="${s.batch_holdout || 0}" title="每项把窗口末尾 N 个月作为真测试集(训练不可见),跑完后按留出集指标对比排序。0=不启用。"></label>
       <label class="chk"><input id="batchRebuild" type="checkbox" ${s.batch_rebuild ? "checked" : ""}> 先重建数据集(吸收最新行情,慢)</label>
     </div>
     <div class="btn-row">
@@ -1925,11 +1935,12 @@ async function startBatch() {
   const cells = [...document.querySelectorAll(".btCell:checked")].map(c => c.value);
   if (!cells.length) { toast("请至少勾选一个 模型×特征集 组合", false); return; }
   const epochs = parseInt($("#batchEpochs").value, 10) || 40;
+  const hol = parseInt($("#batchHoldout").value, 10) || 0;
   try {
     const r = await api("/api/train/batch/start", { method: "POST", body: JSON.stringify({
       items: cells.map(c => { const [a, b] = c.split("|"); return { model_type: a, feat_set: b }; }),
-      epochs, rebuild_dataset: $("#batchRebuild").checked }) });
-    toast(`批量训练已启动: ${r.n} 个组合 · ${r.tag}`);
+      epochs, rebuild_dataset: $("#batchRebuild").checked, holdout_months: hol }) });
+    toast(`批量训练已启动: ${r.n} 个组合 · ${r.tag}${hol ? ` · 留出测试 ${hol} 个月` : ""}`);
     renderTrain();
   } catch (e) { toast(e.message, false); }
 }
@@ -1952,16 +1963,20 @@ function batchJobsTable(bts, mt) {
   const rows = (bts.items || []).map(it => Object.assign({}, it, rmap[it.idx] || { state: "pending" }));
   const done = rows.filter(r => r.state === "done");
   const rest = rows.filter(r => r.state !== "done").sort((a, b) => a.idx - b.idx);
-  const sharpeOf = r => (r.state === "done" && r.model_type !== "lgb_hl" && r.model_type !== "high" && r.model_type !== "low" && oos[r.feat_set] && oos[r.feat_set].top50_sharpe != null) ? oos[r.feat_set].top50_sharpe : null;
+  const hoOf = r => (r.holdout && r.holdout.horizons && r.holdout.horizons["60"] && r.holdout.horizons["60"].sharpe != null) ? r.holdout.horizons["60"] : null;
+  const sharpeOf = r => (hoOf(r) && hoOf(r).sharpe != null) ? hoOf(r).sharpe
+    : (r.state === "done" && r.model_type !== "lgb_hl" && r.model_type !== "high" && r.model_type !== "low" && oos[r.feat_set] && oos[r.feat_set].top50_sharpe != null) ? oos[r.feat_set].top50_sharpe : null;
   done.sort((a, b) => (sharpeOf(b) ?? -9) - (sharpeOf(a) ?? -9));
   const order = rest.concat(done);
   const span = (bts.manager && bts.manager.job && bts.manager.job.label) ? esc(bts.manager.job.label) : "";
+  const hasHo = done.some(r => hoOf(r));
   let h = `<div class="busy-bar-lite">批量目录: ${esc(bts.dir)}${bts.created_at ? " · 创建于 " + esc(bts.created_at) : ""}${span ? " · " + span : ""}</div>
-    <table class="grid-tbl"><thead><tr><th>#</th><th>状态</th><th>模型×特征</th><th>耗时</th><th>训练样本</th><th>特征数</th><th>训练区间</th><th>折6 OOS Sharpe</th><th>折6 MDD</th><th>折6 ens60 IC</th></tr></thead><tbody>`;
+    <table class="grid-tbl"><thead><tr><th>#</th><th>状态</th><th>模型×特征</th><th>耗时</th><th>训练样本</th><th>特征数</th><th>训练区间</th><th>留出测试 IC(60d)</th><th>留出测试 Sharpe</th><th>折6 OOS Sharpe</th><th>折6 MDD</th><th>折6 ens60 IC</th></tr></thead><tbody>`;
   for (const r of order) {
     const c = r.config || {};
     const sp = mt[r.model_type] || {};
     const sharpe = sharpeOf(r);
+    const ho = hoOf(r);
     const f6 = (r.model_type === "main" || r.model_type === "mlp") ? (oos[r.feat_set] || null) : null;
     h += `<tr><td>${r.idx}</td><td>${batchRowState(r)}</td>
       <td><b title="${esc(sp.label || r.model_type)}">${esc(r.model_type)}</b> × ${esc(r.feat_set)}</td>
@@ -1969,7 +1984,9 @@ function batchJobsTable(bts, mt) {
       <td>${isBad(c.n_train_samples) ? "—" : fmtMoney(c.n_train_samples)}</td>
       <td>${esc(c.n_features ?? "—")}</td>
       <td>${esc(String(c.date_min || "—").slice(0, 10))} → ${esc(String(c.date_max || "—").slice(0, 10))}</td>
-      <td><b class="${sharpe != null && sharpe >= 1 ? "pos" : ""}">${sharpe != null ? fmt(sharpe, 2) : (f6 ? "—" : "·")}</b></td>
+      <td>${ho ? `<b class="${ho.ic >= 0.05 ? "pos" : ""}">${fmt(ho.ic, 4)}</b><span class="dim"> (t ${fmt(ho.ic_t, 1)})</span>` : "—"}</td>
+      <td>${ho ? `<b class="${ho.sharpe >= 1 ? "pos" : ""}">${fmt(ho.sharpe, 2)}</b>` : "—"}</td>
+      <td><b class="${sharpe != null && !ho && sharpe >= 1 ? "pos" : ""}">${sharpe != null ? fmt(sharpe, 2) : (f6 ? "—" : "·")}</b></td>
       <td>${f6 ? fmtPct(f6.top50_mdd) : "·"}</td>
       <td>${f6 ? fmt(f6.ens60_ic, 4) : "·"}</td></tr>`;
   }
@@ -1979,7 +1996,7 @@ function batchJobsTable(bts, mt) {
     h += `<p class="dim">⚠ 上一批被停止/中断:${stuck} 项停在「训练中」(未写入结束状态)。继续在下方勾选新组合开新批即可;残留目录可手动删除。</p>`;
   }
   if (done.length) {
-    h += `<p class="dim">排序键 = 折6样本外 Sharpe(output/fold6_&lt;feat&gt;_result.json,同特征集同架构独立折6,main/mlp 才可比;high/low/lgb_hl 目标不同不排此轴)。完成 ${done.length}/${rows.length}。本批产物自身绩效需先「部署到生产」或走回测页跑引擎。</p>`;
+    h += `<p class="dim">${hasHo ? "排序键 = 留出测试集 Sharpe(窗口末尾 N 月,训练不可见,ens_60 逐日 Top30 标签均值序列年化 √252;IC=逐日秩相关均值与 t)。" : "排序键 = 折6样本外 Sharpe(output/fold6_&lt;feat&gt;_result.json,同特征集同架构独立折6,main/mlp 才可比;high/low/lgb_hl 目标不同不排此轴)。"}完成 ${done.length}/${rows.length}。留出集 Sharpe 是信号代理(60d 前向标签),非真实回测;真实绩效需部署后走回测页引擎。</p>`;
   } else if (bts.batch_active) {
     h += `<p class="dim">首项训练进行中…(每项完成后自动加入表内并实时刷新;日志见上方「运行日志」)。</p>`;
   } else {
@@ -2461,6 +2478,142 @@ function closePxModal() {
   if (charts.pxVol) { charts.pxVol.destroy(); delete charts.pxVol; }
   if (charts.pxPred) { charts.pxPred.destroy(); delete charts.pxPred; }
   if (charts.__volCleanup) { try { charts.__volCleanup(); } catch (_) {} delete charts.__volCleanup; }
+}
+
+/* ── 07 运行日志(统一日志浏览 + 错误扫描) ───────────────────────────── */
+const LOGS = { file: "", q: "", line: 0, follow: true };
+
+async function renderLogs() {
+  const el = pageEl("logs");
+  el.innerHTML = `<div class="card"><h3>错误扫描<span class="dim">(7 天内日志 · 每 6s 自动刷新)</span></h3>
+      <div id="logsScan"><div class="loading">扫描中…</div></div></div>
+    <div class="card"><h3>日志文件<span class="dim">(output/ + data/ 下所有 *.log)</span></h3>
+      <div id="logsFiles"><div class="loading">加载中…</div></div></div>
+    <div class="card"><h3>日志查看器</h3>
+      <div class="form-grid inline">
+        <label style="min-width:260px">文件 <select id="lvFile"></select></label>
+        <label>过滤关键词 <input id="lvQ" placeholder="留空=全部" oninput="logsClearLine()"></label>
+        <label>跳转行号 <input id="lvLine" type="number" min="1" style="width:90px"></label>
+        <label class="chk"><input id="lvFollow" type="checkbox" checked> 跟随刷新(近底部时)</label>
+        <button class="btn" onclick="logsView()">刷新</button>
+      </div>
+      <div id="lvMeta" class="dim" style="margin:6px 0"></div>
+      <pre class="console" id="lvPre" style="height:52vh; max-height:520px; line-height:1.55"></pre>
+    </div>`;
+  refreshLogs();
+  clearPolls();
+  POLLS["logs"] = setInterval(refreshLogs, 6000);
+}
+
+async function refreshLogs() {
+  try {
+    const [lst, scan] = await Promise.all([api("/api/logs/list"), api("/api/logs/scan")]);
+    renderLogsScan(scan);
+    renderLogsFiles(lst);
+  } catch (_) { /* 瞬时失败忽略,下轮重试 */ }
+  if (LOGS.file && !document.hidden) logsView(true);
+}
+
+function logsBadge(n) {
+  if (!n) return `<span class="tag ok-tag">✓ 无错误</span>`;
+  return `<span class="tag err-tag">🔴 ${n} 处</span>`;
+}
+
+function renderLogsScan(scan) {
+  const box = document.getElementById("logsScan");
+  if (!box) return;
+  const rows = scan.files || [];
+  if (!rows.length) {
+    box.innerHTML = `<p class="dim">7 天内没有带错误/警告的日志(扫描于 ${esc(scan.scanned_at || "")})。</p>`;
+    return;
+  }
+  let h = `<p class="dim">扫描于 ${esc(scan.scanned_at || "")} · ${scan.files_with_errors} 个文件含错误特征 · 共 ${scan.total_errors} 处。</p>
+    <table class="grid-tbl"><thead><tr><th>文件</th><th>更新时间</th><th>错误</th><th>最新错误时间</th><th>错误预览</th><th></th></tr></thead><tbody>`;
+  for (const r of rows) {
+    const e0 = (r.errors && r.errors[0]) || {};
+    h += `<tr><td><b>${esc(r.file)}</b></td><td>${esc(r.mtime)}</td>
+      <td>${logsBadge(r.err_count)}</td>
+      <td>${esc(r.last_err_ts || "—")}</td>
+      <td class="dim" style="max-width:520px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${esc(e0.text || "")}</td>
+      <td><button class="btn small" onclick="logsOpen('${esc(r.file)}', ${e0.n || 0})">定位</button></td></tr>`;
+  }
+  h += `</tbody></table>`;
+  box.innerHTML = h;
+}
+
+function renderLogsFiles(lst) {
+  const box = document.getElementById("logsFiles");
+  if (!box) return;
+  const sel = document.getElementById("lvFile");
+  if (sel) {
+    const prev = sel.value;
+    sel.innerHTML = `<option value="">— 选择日志文件 —</option>` + (lst.rows || []).map(r =>
+      `<option value="${esc(r.file)}">${esc(r.file)} (${r.size_kb}K)</option>`).join("");
+    if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+    if (LOGS.file && !prev) sel.value = LOGS.file;
+  }
+  if (!lst.rows || !lst.rows.length) {
+    box.innerHTML = `<p class="warn">未发现日志文件。</p>`;
+    return;
+  }
+  let h = `<table class="grid-tbl"><thead><tr><th>文件</th><th>大小</th><th>行数(估)</th><th>更新时间</th><th></th></tr></thead><tbody>`;
+  for (const r of lst.rows) {
+    h += `<tr><td><b>${esc(r.file)}</b></td><td>${r.size_kb} KB</td><td>${fmtMoney(r.lines_est)}</td><td>${esc(r.mtime)}</td>
+      <td><button class="btn small" onclick="logsOpen('${esc(r.file)}')">查看</button></td></tr>`;
+  }
+  h += `</tbody></table>`;
+  box.innerHTML = h;
+}
+
+const LOG_ERR_RE = /Traceback|ERROR|CRITICAL|Exception|失败|❌|🔴|rc=[1-9]|错误|denied|refused|Segmentation/i;
+const LOG_WARN_RE = /Warning|警告|⚠|🟡|跳过|疑似/i;
+
+function logsOpen(file, line) {
+  LOGS.file = file; LOGS.line = line || 0;
+  LOGS.q = "";
+  const q = document.getElementById("lvQ"); if (q) q.value = "";
+  const ln = document.getElementById("lvLine"); if (ln) ln.value = line || "";
+  const sel = document.getElementById("lvFile"); if (sel) sel.value = file;
+  logsView(false);
+}
+
+function logsClearLine() {
+  // 输入新关键词后不再受上次「定位」行号窗口限制(全文件搜索)
+  const ln = document.getElementById("lvLine");
+  if (ln && ln.value) ln.value = "";
+}
+
+async function logsView(quiet) {
+  const pre = document.getElementById("lvPre");
+  if (!pre) return;
+  const file = LOGS.file || (document.getElementById("lvFile") || {}).value || "";
+  const q = (document.getElementById("lvQ") || {}).value || "";
+  const line = parseInt((document.getElementById("lvLine") || {}).value, 10) || 0;
+  if (!file) { pre.textContent = "选择左侧/上方一个日志文件开始查看。"; return; }
+  try {
+    const r = await api(`/api/logs/read?file=${encodeURIComponent(file)}&q=${encodeURIComponent(q)}&limit=800${line ? `&line=${line}` : ""}`);
+    if (!r.available) { pre.textContent = r.message || "读取失败"; return; }
+    const nearBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 120;
+    const jump = LOGS.line;
+    const meta = document.getElementById("lvMeta");
+    if (meta) meta.textContent = `${r.file} · ${r.size_kb} KB · 总行数 ${fmtMoney(r.total_lines)}${q ? ` · 匹配 ${r.matched} 行` : ""} · 更新 ${r.mtime}`;
+    const lines = (r.lines || []).map(l => {
+      const cls = LOG_ERR_RE.test(l.text) ? " log-err" : (LOG_WARN_RE.test(l.text) ? " log-warn" : "");
+      return `<div class="log-line${cls}"><span class="ln">${l.n}</span>${esc(l.text)}</div>`;
+    }).join("");
+    if (!quiet || nearBottom || jump) {
+      pre.innerHTML = lines;
+      if (jump) {
+        const target = [...pre.children].find(d => parseInt(d.querySelector(".ln").textContent, 10) >= jump);
+        if (target) pre.scrollTop = target.offsetTop - 10;
+        LOGS.line = 0;
+      } else if (nearBottom && !jump) {
+        pre.scrollTop = pre.scrollHeight;
+      }
+    }
+  } catch (e) {
+    if (!quiet) pre.textContent = "读取失败: " + e.message;
+  }
 }
 
 document.querySelectorAll(".step").forEach(s => s.addEventListener("click", () => showPage(s.dataset.page)));
