@@ -650,9 +650,9 @@ async function renderBacktest() {
   <div id="btResult"><div class="loading">尚未运行回测;运行完成后此处展示绩效与资金曲线。</div></div>`;
 
   html += panoramaSection(panoSt, panoRep);
+  html += `<div id="panoResult"></div>`;  // 全景对比表 + 资金曲线紧贴全景卡, 在 9 起点复核之上
   html += rollingSection(vst);
   html += `<div id="rollingMatrix"></div>`;
-  html += `<div id="panoResult"></div>`;
   html += `<div id="rollingResult"></div>`;
 
   el.innerHTML = html;
