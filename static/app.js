@@ -1519,9 +1519,9 @@ async function renderPaper() {
     tile("账户净值", "$" + fmtMoney(st.equity), st.initialized ? `初始 $${fmtMoney(st.starting_balance)}` : "未初始化", st.initialized ? "green" : "amber"),
     tile("现金", "$" + fmtMoney(st.cash), st.initialized ? `最后结算 ${esc(st.last_settle || "—")}` : "", ""),
     tile("持仓市值", "$" + fmtMoney(st.positions_value), `${esc(st.n_positions)} 个持仓`, ""),
-    tile("已实现盈亏(模拟)", "$" + fmtMoney(st.realized_pnl), "模拟账户自身卖出(web/paper_data/trades.csv)", st.realized_pnl >= 0 ? "green" : "red"),
-    tile("已实现盈亏(真实)", st.real_account && st.real_account.available ? "$" + fmtMoney(st.real_account.total) : "—",
-      st.real_account && st.real_account.available ? `真实台账 data/sales.csv · ${st.real_account.n} 笔 · 胜率 ${st.real_account.win_rate != null ? fmtP(st.real_account.win_rate, 0) : "—"}` : (st.real_account && st.real_account.message) || "",
+    tile("已实现盈亏(页面台账)", "$" + fmtMoney(st.realized_pnl), "页面内卖出(web/paper_data/trades.csv)", st.realized_pnl >= 0 ? "green" : "red"),
+    tile("已实现盈亏(券商台账)", st.real_account && st.real_account.available ? "$" + fmtMoney(st.real_account.total) : "—",
+      st.real_account && st.real_account.available ? `data/sales.csv · ${st.real_account.n} 笔 · 胜率 ${st.real_account.win_rate != null ? fmtP(st.real_account.win_rate, 0) : "—"}` : (st.real_account && st.real_account.message) || "",
       st.real_account && st.real_account.available ? (st.real_account.total >= 0 ? "green" : "red") : ""),
   ];
 
@@ -1548,18 +1548,33 @@ async function renderPaper() {
     <div class="card"><h3>持仓</h3><div id="ppPos"></div></div>
     <div class="card"><h3>成交流水(最近 50 笔)</h3><div id="ppTrades"></div></div>
   </div>
-  <div class="card"><h3>真实账户卖出台账(data/sales.csv · src/sales_book.py 记账)</h3><div id="ppRealLedger"></div></div>`;
+  <div class="card"><h3>券商卖出台账(data/sales.csv · src/sales_book.py 记账)</h3><div id="ppRealLedger"></div></div>`;
 
   el.innerHTML = html;
 
   const eq = st.equity_points || [];
   if (eq.length > 1) {
+    const dates = eq.map(p => p.date);
+    const eqData = eq.map(p => p.equity);
+    const sales = ((st.real_account && st.real_account.rows) || []).slice()
+      .sort((a, b) => a.sell_date < b.sell_date ? -1 : 1);
+    // 累计已实现盈亏(券商台账): 按卖出日累计, 卖出后保持(阶梯线), 与净值共用时间轴
+    let cum = 0, ri = 0;
+    const realCum = dates.map(d => { while (ri < sales.length && sales[ri].sell_date <= d) { cum += (sales[ri].realized_pnl || 0); ri++; } return Math.round(cum * 100) / 100; });
+    // 卖出日晚于净值末日时补点(净值线留空)
+    while (ri < sales.length) { dates.push(sales[ri].sell_date); eqData.push(null); cum += (sales[ri].realized_pnl || 0); realCum.push(Math.round(cum * 100) / 100); ri++; }
+    const datasets = [{ label: "账户净值", data: eqData, borderColor: "#4ade80", backgroundColor: "rgba(74,222,128,0.07)", fill: true, pointRadius: 0, borderWidth: 1.5 }];
+    const scales = { x: { grid: CHART_STYLE.grid, ticks: { color: "#8a94a8", maxTicksLimit: 10 } }, y: { grid: CHART_STYLE.grid, ticks: CHART_STYLE.ticks } };
+    if (sales.length) {
+      datasets.push({ label: "累计已实现盈亏($)", data: realCum, borderColor: "#fbbf24", backgroundColor: "rgba(251,191,36,0.06)", fill: false, pointRadius: 0, borderWidth: 1.5, stepped: true, yAxisID: "y1" });
+      scales.y1 = { position: "right", grid: { drawOnChartArea: false }, ticks: { color: "#fbbf24" } };
+    }
     chart("ppEquity", {
       type: "line",
-      data: { labels: eq.map(p => p.date), datasets: [{ label: "账户净值", data: eq.map(p => p.equity), borderColor: "#4ade80", backgroundColor: "rgba(74,222,128,0.07)", fill: true, pointRadius: 0, borderWidth: 1.5 }] },
+      data: { labels: dates, datasets },
       options: { responsive: true, maintainAspectRatio: false,
         plugins: { legend: { labels: CHART_STYLE } },
-        scales: { x: { grid: CHART_STYLE.grid, ticks: { color: "#8a94a8", maxTicksLimit: 10 } }, y: { grid: CHART_STYLE.grid, ticks: CHART_STYLE.ticks } } },
+        scales },
     });
   }
   const posEl = document.getElementById("ppPos");
