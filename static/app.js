@@ -1559,7 +1559,12 @@ async function renderPaper() {
       .sort((a, b) => a.sell_date < b.sell_date ? -1 : 1);
     // 累计已实现盈亏(券商台账): 按卖出日累计, 卖出后保持(阶梯线), 与净值共用时间轴
     let cum = 0, ri = 0;
-    const realCum = dates.map(d => { while (ri < sales.length && sales[ri].sell_date <= d) { cum += (sales[ri].realized_pnl || 0); ri++; } return Math.round(cum * 100) / 100; });
+    const realCum = dates.map((d, i) => {
+      // 入金起点(origin)不代表任何持仓/卖出, 累计盈亏从第一个真实结算点开始
+      if (eq[i] && eq[i].origin) return Math.round(cum * 100) / 100;
+      while (ri < sales.length && sales[ri].sell_date <= d) { cum += (sales[ri].realized_pnl || 0); ri++; }
+      return Math.round(cum * 100) / 100;
+    });
     // 卖出日晚于净值末日时补点(净值线留空)
     while (ri < sales.length) { dates.push(sales[ri].sell_date); eqData.push(null); cum += (sales[ri].realized_pnl || 0); realCum.push(Math.round(cum * 100) / 100); ri++; }
     const datasets = [{ label: "账户净值", data: eqData, borderColor: "#4ade80", backgroundColor: "rgba(74,222,128,0.07)", fill: true, pointRadius: 0, borderWidth: 1.5 }];
