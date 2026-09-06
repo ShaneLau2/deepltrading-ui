@@ -64,6 +64,10 @@ const TT_FONT = { bodyFont: { size: 13.5 }, titleFont: { size: 13.5 } };
 /* ── 导航 ─────────────────────────────────────────────────────────── */
 const POLLS = {};
 function clearPolls() { Object.values(POLLS).forEach(clearInterval); Object.keys(POLLS).forEach(k => delete POLLS[k]); }
+// 覆写式注册轮询: 先清旧再建新,避免重复渲染时泄漏多个并行定时器
+// (修复: 任务结束后页面反复刷新的根因 —— 完成分支触发的重渲染从不清理自己的 interval)
+function pollSet(key, fn, ms) { clearInterval(POLLS[key]); delete POLLS[key]; POLLS[key] = setInterval(fn, ms); }
+function pollDrop(key) { clearInterval(POLLS[key]); delete POLLS[key]; }
 
 function showPage(name) {
   clearPolls();
@@ -109,7 +113,7 @@ function logConsole(containerId) {
 
 function pollLog(containerId, url, active) {
   if (active) {
-    POLLS["log-" + containerId] = setInterval(async () => {
+    pollSet("log-" + containerId, async () => {
       try {
         const r = await api(url);
         const el = document.getElementById(containerId);
@@ -321,7 +325,7 @@ async function renderOverview() {
         scales: { x: { grid: CHART_STYLE.grid, ticks: { color: "#8a94a8", maxTicksLimit: 8 } }, y: { grid: CHART_STYLE.grid, ticks: CHART_STYLE.ticks } } },
     });
   }
-  POLLS["hdr"] = setInterval(pollHeader, 4000);
+  pollSet("hdr", pollHeader, 4000);
 }
 
 
@@ -400,6 +404,7 @@ function ovDrawCurve() {
 
 /* ── 01 模型训练 ──────────────────────────────────────────────────── */
 async function renderTrain() {
+  pollDrop("train"); pollDrop("f6");
   const el = pageEl("train");
   el.innerHTML = `<div class="loading">加载训练状态…</div>`;
   let st, cfg, vst, bts;
@@ -543,9 +548,9 @@ async function renderTrain() {
   onModelTypeChange();
   pollLog("trainLog", "/api/train/log", active);
   const f6Active = (vst.fold6 && vst.fold6.status && vst.fold6.status.active);
-  if (active) POLLS["train"] = setInterval(() => { renderTrain(); }, 3000);
-  else if (f6Active) POLLS["f6"] = setInterval(() => { renderTrain(); }, 4000);
-  else POLLS["hdr"] = setInterval(pollHeader, 4000);
+  if (active) pollSet("train", () => { renderTrain(); }, 3000);
+  else if (f6Active) pollSet("f6", () => { renderTrain(); }, 4000);
+  else pollSet("hdr", pollHeader, 4000);
 }
 
 function onModelTypeChange() {
@@ -607,6 +612,7 @@ async function deployExp(tag) {
 
 /* ── 02 策略回测 ──────────────────────────────────────────────────── */
 async function renderBacktest() {
+  pollDrop("bt"); pollDrop("rolling"); pollDrop("pano");
   const el = pageEl("backtest");
   el.innerHTML = `<div class="loading">加载回测状态…</div>`;
   let st, def, panoSt, panoRep, vst;
@@ -652,7 +658,7 @@ async function renderBacktest() {
   el.innerHTML = html;
   pollLog("btLog", "/api/backtest/status", false); // 专用:见下
   if (active) {
-    POLLS["bt"] = setInterval(async () => {
+    pollSet("bt", async () => {
       try {
         const r = await api("/api/backtest/status");
         const lc = document.getElementById("btLog");
@@ -664,12 +670,12 @@ async function renderBacktest() {
       renderSweepPending();
     }
   } else {
-    POLLS["hdr"] = setInterval(pollHeader, 4000);
+    pollSet("hdr", pollHeader, 4000);
     loadBtReport();
   }
   const rollingActive = (vst.rolling && vst.rolling.status && vst.rolling.status.active);
   if (rollingActive) {
-    POLLS["rolling"] = setInterval(async () => {
+    pollSet("rolling", async () => {
       try {
         const r = await api("/api/validate/status");
         const lc = document.getElementById("rollingLog");
@@ -682,7 +688,7 @@ async function renderBacktest() {
     renderRollingMatrix(vst);
   }
   if (panoActive) {
-    POLLS["pano"] = setInterval(async () => {
+    pollSet("pano", async () => {
       try {
         const r = await api("/api/backtest/panorama/status");
         const lc = document.getElementById("panoLog");
@@ -1277,6 +1283,7 @@ const SIG_ROWS = {};  // symbol -> 最新信号行(供点击弹行情图)
 let BT_REPORT = null;  // 最近一次普通回测报告(供导出用)
 
 async function renderSignals() {
+  pollDrop("sg");
   const el = pageEl("signals");
   el.innerHTML = `<div class="loading">加载信号…</div>`;
   let st, latest, cfg;
@@ -1332,7 +1339,7 @@ async function renderSignals() {
 
   pollLog("sgLog", "/api/signals/status", false);
   if (active) {
-    POLLS["sg"] = setInterval(async () => {
+    pollSet("sg", async () => {
       try {
         const r = await api("/api/signals/status");
         const lc = document.getElementById("sgLog");
@@ -1341,7 +1348,7 @@ async function renderSignals() {
       } catch (_) {}
     }, 2000);
   } else {
-    POLLS["hdr"] = setInterval(pollHeader, 4000);
+    pollSet("hdr", pollHeader, 4000);
   }
 }
 
@@ -1544,7 +1551,7 @@ async function renderPaper() {
     trEl.innerHTML = `<table class="grid-tbl"><thead><tr><th>日期</th><th>代码</th><th>方向</th><th>数量</th><th>价格</th><th>盈亏</th><th>原因</th></tr></thead><tbody>${
       st.trades.slice().reverse().map(t => `<tr><td>${esc(t.date)}</td><td><b>${esc(t.symbol)}</b></td><td>${t.side === "buy" ? "买" : "卖"}</td><td>${esc(t.qty)}</td><td>${fmt(t.price, 2)}</td><td>${t.side === "sell" ? fmtMoney(t.pnl) : "—"}</td><td>${esc(t.reason)}</td></tr>`).join("")}</tbody></table>`;
   } else trEl.innerHTML = `<p class="dim">暂无成交</p>`;
-  POLLS["hdr"] = setInterval(pollHeader, 4000);
+  pollSet("hdr", pollHeader, 4000);
 }
 
 async function paperInit() {
@@ -1608,6 +1615,7 @@ function renderPage2() {
 
 /* ── 05 模型自进化 ────────────────────────────────────────────────── */
 async function renderEvolve() {
+  pollDrop("ev");
   const el = pageEl("evolve");
   el.innerHTML = `<div class="loading">加载自进化状态…</div>`;
   let ov, st;
@@ -1862,7 +1870,7 @@ async function renderEvolve() {
   el.innerHTML = html;
   pollLog("evLog", "/api/evolve/status", false);
   if (active) {
-    POLLS["ev"] = setInterval(async () => {
+    pollSet("ev", async () => {
       try {
         const r = await api("/api/evolve/status");
         const lc = document.getElementById("evLog");
@@ -1871,7 +1879,7 @@ async function renderEvolve() {
       } catch (_) {}
     }, 2500);
   } else {
-    POLLS["hdr"] = setInterval(pollHeader, 4000);
+    pollSet("hdr", pollHeader, 4000);
   }
 }
 
@@ -2013,6 +2021,7 @@ function renderBatchBox(bts, mt) {
 
 /* ── 06 候选特征流水线 ─────────────────────────────────────────────── */
 async function renderPipeline() {
+  pollDrop("pipe");
   const el = pageEl("pipeline");
   el.innerHTML = `<div class="loading">加载候选特征流水线…</div>`;
   let st;
@@ -2108,7 +2117,7 @@ async function renderPipeline() {
   el.innerHTML = html;
   pollLog("pipeLog", "/api/pipeline/status", false);
   if (active) {
-    POLLS["pipe"] = setInterval(async () => {
+    pollSet("pipe", async () => {
       try {
         const r = await api("/api/pipeline/status");
         const lc = document.getElementById("pipeLog");
@@ -2117,7 +2126,7 @@ async function renderPipeline() {
       } catch (_) {}
     }, 2500);
   } else {
-    POLLS["hdr"] = setInterval(pollHeader, 4000);
+    pollSet("hdr", pollHeader, 4000);
   }
 }
 
@@ -2502,7 +2511,7 @@ async function renderLogs() {
     </div>`;
   refreshLogs();
   clearPolls();
-  POLLS["logs"] = setInterval(refreshLogs, 6000);
+  pollSet("logs", refreshLogs, 6000);
 }
 
 async function refreshLogs() {
