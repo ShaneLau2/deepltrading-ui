@@ -1519,8 +1519,7 @@ async function renderPaper() {
     tile("账户净值", "$" + fmtMoney(st.equity), st.initialized ? `初始 $${fmtMoney(st.starting_balance)}` : "未初始化", st.initialized ? "green" : "amber"),
     tile("现金", "$" + fmtMoney(st.cash), st.initialized ? `最后结算 ${esc(st.last_settle || "—")}` : "", ""),
     tile("持仓市值", "$" + fmtMoney(st.positions_value), `${esc(st.n_positions)} 个持仓`, ""),
-    tile("已实现盈亏(页面台账)", "$" + fmtMoney(st.realized_pnl), "页面内卖出(web/paper_data/trades.csv)", st.realized_pnl >= 0 ? "green" : "red"),
-    tile("已实现盈亏(券商台账)", st.real_account && st.real_account.available ? "$" + fmtMoney(st.real_account.total) : "—",
+    tile("已实现盈亏", st.real_account && st.real_account.available ? "$" + fmtMoney(st.real_account.total) : "—",
       st.real_account && st.real_account.available ? `data/sales.csv · ${st.real_account.n} 笔 · 胜率 ${st.real_account.win_rate != null ? fmtP(st.real_account.win_rate, 0) : "—"}` : (st.real_account && st.real_account.message) || "",
       st.real_account && st.real_account.available ? (st.real_account.total >= 0 ? "green" : "red") : ""),
   ];
