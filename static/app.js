@@ -1542,7 +1542,7 @@ async function renderPaper() {
     <p class="dim">「同步真实持仓」把 data/holdings.csv(symbol/entry_date/entry_price/qty)导入模拟账户: 现金 = 初始资金 − Σ(数量×入场价),立即按最新收盘结算一次。之后可手动/按信号调仓。</p>
     <p class="dim">调仓 = 卖出不在最新信号 Top-N 名单的持仓,再按现金等权买入名单内未持有者(最新面板收盘价 ± 滑点,双向手续费)。</p>
   </div>
-  <div class="card"><h3>资金曲线</h3><canvas id="ppEquity"></canvas></div>
+  <div class="card"><h3>资金曲线${(() => { const bf = (st.equity_points || []).filter(p => p.backfill); return bf.length ? ` <span class="dim" style="font-weight:normal">· 含回溯重建 ${esc(bf[0].date)} → ${esc(bf[bf.length-1].date)}(按入场日回放买入 + 面板收盘 mark-to-market, 现金按入场日回放扣减)</span>` : ""; })()}</h3><canvas id="ppEquity"></canvas></div>
   <div class="grid two">
     <div class="card"><h3>持仓</h3><div id="ppPos"></div></div>
     <div class="card"><h3>成交流水(最近 50 笔)</h3><div id="ppTrades"></div></div>
