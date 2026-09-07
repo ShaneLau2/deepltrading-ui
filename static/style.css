@@ -270,6 +270,28 @@ details.cmp[open] summary { margin-bottom: 10px; }
 #sgTable tbody tr:hover { background: rgba(148, 163, 184, 0.09); }
 
 
+/* ── 研究流水线(一键 + 子区折叠) ── */
+.rs-steps { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
+.rs-step { display: flex; align-items: center; gap: 7px; padding: 6px 14px; border-radius: 999px;
+  border: 1px solid var(--border2); color: var(--dim); font-size: 13px; background: rgba(148, 163, 184, 0.05); }
+.rs-step i { font-style: normal; font-size: 12px; }
+.rs-step.active { border-color: #22d3ee; color: #22d3ee; background: rgba(34, 211, 238, 0.10); }
+.rs-step.done { border-color: rgba(74, 222, 128, 0.5); color: #4ade80; background: rgba(74, 222, 128, 0.08); }
+.rs-zones { display: grid; gap: 10px; }
+.rs-zone { border: 1px solid var(--border2); border-radius: 12px; background: rgba(148, 163, 184, 0.04); }
+.rs-zone > summary { cursor: pointer; padding: 12px 16px; display: flex; gap: 10px; align-items: baseline;
+  font-size: 15px; color: var(--fg); user-select: none; }
+.rs-zone > summary .dim { font-size: 12.5px; margin-left: 6px; }
+.rs-zone[open] > summary { border-bottom: 1px solid var(--border2); }
+.rs-zone-body { padding: 14px 16px; }
+.sug { border: 1px solid var(--border2); border-left: 3px solid #60a5fa; border-radius: 10px;
+  padding: 10px 14px; margin: 8px 0; background: rgba(148, 163, 184, 0.05); }
+.sug p { margin: 4px 0; color: var(--dim); font-size: 13.5px; line-height: 1.6; }
+.sug.green { border-left-color: #4ade80; }
+.sug.amber { border-left-color: #fbbf24; }
+.sug.red { border-left-color: #f87171; }
+
+
 /* ── 回测报告导出 ── */
 .export-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 .export-row .btn-row { margin: 0; }

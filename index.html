@@ -42,51 +42,38 @@
         <span class="step-body"><span class="step-title">总览</span><span class="step-sub">模型健康 · 净值</span></span>
       </button>
       <span class="step-link"></span>
-      <button type="button" class="step" data-page="train">
+      <button type="button" class="step" data-page="research">
         <span class="step-index">01</span>
-        <span class="step-body"><span class="step-title">模型训练</span><span class="step-sub">多管线训练 · 批量对比</span></span>
-      </button>
-      <span class="step-link"></span>
-      <button type="button" class="step" data-page="backtest">
-        <span class="step-index">02</span>
-        <span class="step-body"><span class="step-title">策略回测</span><span class="step-sub">资金曲线 · 绩效评估</span></span>
+        <span class="step-body"><span class="step-title">研究流水线</span><span class="step-sub">一键研究 · 训练/回测/进化/特征</span></span>
       </button>
       <span class="step-link"></span>
       <button type="button" class="step" data-page="signals">
-        <span class="step-index">03</span>
+        <span class="step-index">02</span>
         <span class="step-body"><span class="step-title">实时信号</span><span class="step-sub">选股 · 交易计划</span></span>
       </button>
       <span class="step-link"></span>
       <button type="button" class="step" data-page="paper">
-        <span class="step-index">04</span>
+        <span class="step-index">03</span>
         <span class="step-body"><span class="step-title">模拟实盘</span><span class="step-sub">纸上交易 · 成交流水</span></span>
       </button>
       <span class="step-link"></span>
-      <button type="button" class="step" data-page="evolve">
-        <span class="step-index">05</span>
-        <span class="step-body"><span class="step-title">模型自进化</span><span class="step-sub">调度 · 重训 · 竞技场</span></span>
-      </button>
-      <span class="step-link"></span>
-      <button type="button" class="step" data-page="pipeline">
-        <span class="step-index">06</span>
-        <span class="step-body"><span class="step-title">候选特征流水线</span><span class="step-sub">挖掘 → 复核 → 竞技场</span></span>
-      </button>
-      <span class="step-link"></span>
       <button type="button" class="step" data-page="logs">
-        <span class="step-index">07</span>
+        <span class="step-index">04</span>
         <span class="step-body"><span class="step-title">运行日志</span><span class="step-sub">错误扫描 · 日志查看</span></span>
       </button>
     </nav>
 
     <main id="pages">
       <section class="page" data-page="overview"><div class="page-inner" id="page-overview"></div></section>
-      <section class="page" data-page="train"><div class="page-inner" id="page-train"></div></section>
-      <section class="page" data-page="backtest"><div class="page-inner" id="page-backtest"></div></section>
+      <section class="page" data-page="research"><div class="page-inner" id="page-research"></div></section>
       <section class="page" data-page="signals"><div class="page-inner" id="page-signals"></div></section>
       <section class="page" data-page="paper"><div class="page-inner" id="page-paper"></div></section>
+      <section class="page" data-page="logs"><div class="page-inner" id="page-logs"></div></section>
+      <!-- 研究流水线的四个子区容器(一级导航隐藏, 由研究页展开渲染) -->
+      <section class="page" data-page="train"><div class="page-inner" id="page-train"></div></section>
+      <section class="page" data-page="backtest"><div class="page-inner" id="page-backtest"></div></section>
       <section class="page" data-page="evolve"><div class="page-inner" id="page-evolve"></div></section>
       <section class="page" data-page="pipeline"><div class="page-inner" id="page-pipeline"></div></section>
-      <section class="page" data-page="logs"><div class="page-inner" id="page-logs"></div></section>
     </main>
 
     <div id="pxModal" class="modal-overlay" hidden>

@@ -2,7 +2,10 @@
 "use strict";
 
 const $ = (s) => document.querySelector(s);
-const pageEl = (id) => document.getElementById("page-" + id);
+// 容器重定向: 研究流水线页把 train/backtest/evolve/pipeline 子区渲染到页内折叠容器
+// (一级导航隐藏后, 原 renderX 通过 pageEl(name) 取容器, 重定向到研究页内的子容器)
+const PAGE_TARGET = {};
+const pageEl = (id) => document.getElementById(PAGE_TARGET[id] || ("page-" + id));
 
 /* 后端连接(API 地址 / token / 页头连接框)在 backend.js——必须于本文件之前加载,
    此处经 Backend.init() 启动, 见文件末尾 boot 处。 */
@@ -75,7 +78,7 @@ function showPage(name) {
   try { localStorage.setItem("dl_web_page", name); } catch (_) {}
   document.querySelectorAll(".step").forEach(s => s.classList.toggle("active", s.dataset.page === name));
   document.querySelectorAll(".page").forEach(s => s.classList.toggle("active", s.dataset.page === name));
-  const renderers = { overview: renderOverview, train: renderTrain, backtest: renderBacktest, signals: renderSignals, paper: renderPaper, evolve: renderEvolve, pipeline: renderPipeline, logs: renderLogs };
+  const renderers = { overview: renderOverview, research: renderResearch, signals: renderSignals, paper: renderPaper, logs: renderLogs, train: renderTrain, backtest: renderBacktest, evolve: renderEvolve, pipeline: renderPipeline };
   renderers[name]();
 }
 
@@ -87,6 +90,7 @@ async function pollHeader() {
       api("/api/backtest/status").then(r => r.status),
       api("/api/signals/status").then(r => r.status),
       api("/api/evolve/status").then(r => r.status),
+      api("/api/research/status").then(r => r.status),
       api("/api/backtest/panorama/status").then(r => r.status),
       api("/api/validate/status").then(r => ({ active: !!(r.fold6 && r.fold6.status && r.fold6.status.active) || !!(r.rolling && r.rolling.status && r.rolling.status.active) })),
       api("/api/pipeline/status").then(r => r.job),
@@ -133,20 +137,135 @@ function busySection(job) {
     <button class="btn danger" onclick="stopActive()">停止</button></div>`;
 }
 
+/* 00 总览 · 平均年化增长卡片(CAGR 主值 + 实际逐年年化 + α 分解)。
+   基准 symbol 与净值曲线共用(同 localStorage 键, 切任一即双双重算)。 */
+function buildGrowthCard(g) {
+  if (!g || !g.available || !Array.isArray(g.years) || !g.years.length) return "";
+  const yrs = g.years;
+  const bench = g.bench_symbol || "SPY";
+  const rows = yrs.map((y, i) => {
+    const first = i === 0, lastY = i === yrs.length - 1;
+    const mark = first ? "首年·年中起" : (lastY ? "未完年(YTD)" : "");
+    const nav = fmtPct(y.actual, 1);
+    const naked = y.naked_actual != null ? fmtPct(y.naked_actual, 1) : "—";
+    const benchV = y.bench_actual != null ? fmtPct(y.bench_actual, 1) : "—";
+    const expo = y.avg_exposure != null ? fmtPct(y.avg_exposure, 0) : "—";
+    const beta = y.beta != null ? fmt(y.beta, 2) : "—";
+    const mkt = y.market_contrib != null ? fmtPct(y.market_contrib, 1) : "—";
+    const resA = y.residual_alpha != null ? fmtPct(y.residual_alpha, 1) : "—";
+    return `<tr><td><b>${y.year}</b>${mark ? ` <span class="dim" style="font-weight:400">${mark}</span>` : ""}</td>
+      <td>${y.n_days}</td>
+      <td><b>${nav}</b></td>
+      <td>${naked}</td><td>${benchV}</td>
+      <td>${expo}</td>
+      <td>${beta}</td><td>${mkt}</td>
+      <td><b class="${y.residual_alpha != null && y.residual_alpha < 0 ? "err" : "ok"}">${resA}</b></td>
+      <td class="dim">${esc(y.start)} → ${esc(y.end)}</td></tr>`;
+  }).join("");
+  const chips = [];
+  chips.push(`<span class="tile-value" style="color:var(--green)">${fmtPct(g.cagr, 1)}</span>`);
+  if (g.cagr_naked != null) chips.push(`<span class="tag">V2裸 ${fmtPct(g.cagr_naked, 1)}</span>`);
+  if (g.cagr_bench != null) chips.push(`<span class="tag">${bench} ${fmtPct(g.cagr_bench, 1)}</span>`);
+  if (g.beta != null) chips.push(`<span class="tag">市场 β ${fmt(g.beta, 2)}</span>`);
+  if (g.residual_alpha_cagr != null) chips.push(`<span class="tag">残差 α CAGR ${fmtPct(g.residual_alpha_cagr, 1)}</span>`);
+  // 近端行业归因摘要(如可用)
+  let indNote = "";
+  const ind = g.industry;
+  if (ind && ind.available) {
+    const top = (ind.sectors || []).slice(0, 3).map(s =>
+      `${esc(s.sector)} ${s.tilt >= 0 ? "+" : ""}${(s.tilt * 100).toFixed(0)}%`).join(" / ");
+    indNote = `<p class="dim">近端行业归因(${esc(ind.start)} → ${esc(ind.end)} · ${ind.n_days} 交易日 · 重建每日 top30 vs panel 等权): ` +
+      `累计超额 <b>${fmtPct(ind.excess, 1)}</b> = 行业配置 ${fmtPct(ind.alloc, 1)} + 选股 ${fmtPct(ind.sel, 1)} + 交互 ${fmtPct(ind.inter, 1)}` +
+      `${ind.corr_vs_engine != null ? ` · 与引擎裸净值 corr ${fmt(ind.corr_vs_engine, 2)}` : ""}<br>超配前 3: ${top}(配置贡献见存档快照 ⑤b)</p>`;
+  }
+  return `<div class="card" id="growthCard">
+    <h3>平均年化增长 · 逐年 α 分解<span class="tag ok-tag">几何 CAGR</span>
+      <span class="ov-bench" style="display:inline-flex;align-items:center;gap:6px;float:right;font-weight:400">
+        <label style="font-size:12px;margin:0">基准(与净值图共用)
+          <input id="growthBench" list="ovBenchList" value="${esc(bench)}" autocomplete="off" spellcheck="false"
+                 style="width:92px;font-size:13px">
+        </label>
+      </span>
+    </h3>
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:2px 0 8px">
+      ${chips.join("")}
+      <span class="dim">${esc(g.start)} → ${esc(g.end)} · ${g.n_days} 交易日 · 复利 (末日/首日)^(252/交易日) − 1</span>
+    </div>
+    <div class="table-scroll"><table class="grid-tbl">
+      <thead><tr><th>年份</th><th>交易日</th>
+        <th>V2 生产(实际)</th><th>V2裸(无风控)</th><th>${esc(bench)} 同窗口</th>
+        <th>平均暴露</th><th>β(对${esc(bench)})</th><th>市场贡献</th><th>α(去β)</th><th>区间</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    ${indNote}
+    <p class="dim">口径: <b>V2 生产</b>(裸 k30 × DD阶梯×IC) / <b>V2裸</b>(去风控覆盖 ∏(1+net/暴露)) / <b>${esc(bench)}</b>(同窗口)。` +
+      `<b>市场贡献</b> = 该年 β × ${esc(bench)}实际(β 用该年日收益对基准区间对齐回归;champion 曲线为信号日口径, 日 d 收益在 d→d+1 实现);` +
+      `<b>α(去β)</b> = (1+实际)/(1+市场贡献) − 1, 即剔除市场 beta 后的选股/择时/风控净效果。` +
+      `每年末回撤与年内最深回撤列见「验证证据链快照 ⑤」(存档)。数据源 data/champion_equity.csv。切换基准 → α 列/市场贡献/β 实时重算。</p>
+  </div>`;
+}
+
+/* 总览基准切换(净值曲线 + 年化卡片共用同一 symbol, 双双重算) */
+async function refreshOverviewBench(sym) {
+  sym = (sym || "").trim().toUpperCase();
+  if (!sym) return;
+  localStorage.setItem("ov_bench_sym", sym);
+  ["ovBench", "growthBench"].forEach(id => { const e = document.getElementById(id); if (e) e.value = sym; });
+  try {
+    const [nd, gd] = await Promise.all([
+      api(`/api/overview/equity?symbol=${encodeURIComponent(sym)}`),
+      api(`/api/overview/growth?symbol=${encodeURIComponent(sym)}`).catch(() => null),
+    ]);
+    const used = (nd && nd.bench_symbol) || sym;
+    window.OV_EQ = nd;
+    if (nd && nd.available && nd.points.length) ovDrawCurve();
+    const tag = document.getElementById("ovBenchTag");
+    if (tag) tag.textContent = `绿=V2 生产 · 琥珀虚线=V2裸(无覆盖) · 灰点=基准(${used})`;
+    const h3 = document.querySelector("#page-overview h3");
+    if (h3) h3.textContent = `净值曲线 · V2 生产 / V2裸 / ${used}(三线同图)`;
+    const wrap = document.getElementById("growthCardWrap");
+    if (wrap) { wrap.innerHTML = buildGrowthCard(gd && gd.available ? gd : null); attachBenchListeners(); }
+    if (nd && !nd.available) toast(`基准 ${used} 无行情数据`, false);
+  } catch (err) {
+    toast("基准切换失败: " + err.message, false);
+  }
+}
+
+/* 把基准输入(#ovBench 净值图 + #growthBench 年化卡)绑定到共用切换 —— 双双重算。
+   刷新/重建后需重新调用(growthCard 内部 input 会随 innerHTML 重建)。 */
+function attachBenchListeners() {
+  ["ovBench", "growthBench"].forEach(id => {
+    const e = document.getElementById(id);
+    if (e && !e.dataset.bound) {
+      e.dataset.bound = "1";
+      e.addEventListener("change", (ev) => refreshOverviewBench(ev.target.value));
+    }
+  });
+}
+
+/* 00 总览 · 窗口文案简化: 「全窗口(2021-08 → 2026-08-28 面板末)」→「2021-08 → 2026-08-28」 */
+function fmtWindow(w) {
+  const s = String(w || "");
+  const m = s.match(/\(([^)]+)\)$/);
+  return m ? m[1].replace(/面板末$/, "").trim() : s;
+}
+
 /* ── 00 总览 ──────────────────────────────────────────────────────── */
 async function renderOverview() {
   const el = pageEl("overview");
   el.innerHTML = `<div class="loading">加载总览…</div>`;
-  let data, eq, ic, syms;
+  let data, eq, ic, syms, g0;
   const benchSym0 = (localStorage.getItem("ov_bench_sym") || "QQQ").toUpperCase();
-  try { [data, eq, ic, syms] = await Promise.all([
+  try { [data, eq, ic, syms, g0] = await Promise.all([
       api("/api/overview"),
       api(`/api/overview/equity?symbol=${encodeURIComponent(benchSym0)}`),
       api("/api/overview/ic"),
       api("/api/overview/symbols").then(s => s || [], () => []),
+      api(`/api/overview/growth?symbol=${encodeURIComponent(benchSym0)}`).catch(() => null),
     ]); }
   catch (e) { el.innerHTML = `<div class="err-box">加载失败: ${esc(e.message)}</div>`; return; }
   const benchSym = (eq && eq.bench_symbol) || benchSym0;
+  // 年化卡片与净值图共用基准: 优先按当前 symbol 拉取, 失败回退 /api/overview 内嵌 SPY 版
+  const growthData = (g0 && g0.available) ? g0 : (data.growth || null);
 
   const ch = data.champion || {};
   const rm = data.risk_metrics || {};
@@ -154,15 +273,16 @@ async function renderOverview() {
   const v2 = data.v2_exposure || {};
   const sig = data.latest_signal || {};
 
+  const win = fmtWindow(rm.window);
   const tiles = [
-    tile("V2 净值(生产)", fmt(ch.eq, 2), `${ch.date || "—"} · 裸 k30 × DD×IC`, "green"),
-    tile("V2 回撤(末日)", fmtPct(ch.dd), v2.date ? `距峰值(当前水下) · ${ch.date || v2.date} · 当日暴露 ${fmtP(ch.exposure, 0)}` : "", ch.dd < -0.08 ? "red" : (ch.dd < -0.03 ? "amber" : "green")),
-    tile("V2 暴露(DD×IC)", fmtP(v2.composite_exposure, 0), v2.ic_fallback ? "⚠ IC fallback(纯DD)" : `60日IC ${fmtP(v2.ic_rolling_mean_60)}`, "amber"),
-    tile("模型 IC(60d)", fmt(mv.ic, 4), `t=${fmt(mv.t_nw, 1)} · ${mv.date || "—"}`, mv.ok ? "green" : "red"),
-    tile("OOS IC", fmt(mv.oos_ic, 4), mv.oos_ok ? "✅" : "⚠", mv.oos_ok ? "green" : "red"),
-    tile("Sharpe(V2 全窗)", fmt(rm.sharpe, 2), `Sortino ${fmt(rm.sortino, 2)} · ${esc(rm.window || "")}`, "green"),
-    tile("最大回撤(V2)", fmtPct(rm.max_dd), `历史最深(全窗口极值) · Calmar ${fmt(rm.calmar, 2)} · ${esc(rm.window || "")}`, "amber"),
-    tile("累计收益(V2)", fmtPct(rm.total_return, 0), rm.annual_return != null ? `年化 ${fmtPct(rm.annual_return, 0)}` : esc(rm.window || "截至面板末"), "green"),
+    tile("V2 净值(生产)", fmt(ch.eq, 2), `${ch.date || "—"} · 起点 1 元 → 当前 ${fmt(ch.eq, 2)} 元`, "green"),
+    tile("V2 回撤(当前)", fmtPct(ch.dd), `${ch.date || v2.date || "—"} · 距历史最高点回落 · 当日仓位 ${fmtP(ch.exposure, 0)}`, ch.dd < -0.08 ? "red" : (ch.dd < -0.03 ? "amber" : "green")),
+    tile("当前仓位(风控后)", fmtP(v2.composite_exposure, 0), v2.ic_fallback ? "⚠ 风控回退: 仅按回撤降仓" : `系统按回撤+模型强度自动调仓 · 60日IC ${fmtP(v2.ic_rolling_mean_60)}`, "amber"),
+    tile("模型 IC(60日)", fmt(mv.ic, 4), `预测与未来60日收益的相关性,越接近1越准 · t=${fmt(mv.t_nw, 1)} · ${mv.date || "—"}`, mv.ok ? "green" : "red"),
+    tile("OOS IC(样本外)", fmt(mv.oos_ic, 4), mv.oos_ok ? "样本外预测力 · 显著通过 ✅" : "样本外预测力未通过 ⚠", mv.oos_ok ? "green" : "red"),
+    tile("Sharpe(全期)", fmt(rm.sharpe, 2), `收益风险比(越高越好) · Sortino ${fmt(rm.sortino, 2)} · ${esc(win)}`, "green"),
+    tile("最大回撤(V2)", fmtPct(rm.max_dd), `历史最坏: 从最高点最多跌 ${fmtPct(Math.abs(rm.max_dd))} · Calmar ${fmt(rm.calmar, 2)} · ${esc(win)}`, "amber"),
+    tile("累计收益(V2)", fmtPct(rm.total_return, 0), rm.annual_return != null ? `年化 ${fmtPct(rm.annual_return, 0)}` : `${esc(win)} 区间总涨幅(已含风控与成本)`, "green"),
     tile("最新信号", sig.date || "—", sig.rows ? `${sig.rows} 只候选` : "尚未生成", sig.date ? "green" : "amber"),
   ];
 
@@ -173,7 +293,9 @@ async function renderOverview() {
     : `<span class="tag err-tag">守卫 ✗ 漂移</span>`;
 
   const benchEsc = esc(benchSym);
+  const growthHtml = buildGrowthCard(growthData);
   let html = `<div class="grid tiles">${tiles.join("")}</div>
+  <div id="growthCardWrap">${growthHtml}</div>
   <details class="caliber-panel">
     <summary>口径说明 · 生产配置 as-if 全窗口
       ${cal.dd_recover_confirm_days != null ? `(dd_recover_confirm_days=${cal.dd_recover_confirm_days})` : ""}
@@ -232,20 +354,26 @@ async function renderOverview() {
   }
   html += `</div>`;
 
-  // OOS 面板数据末日 + 落后交易日
+  // OOS 面板数据末日 + 落后交易日(按面板模式: live=需新鲜, fixed/frozen=设计窗口)
   const pf = data.panel_freshness || {};
   if (pf.panels && pf.panels.length) {
     const pRows = pf.panels.map(pp => {
-      const frozen = pp.last && pf.freeze_line && pp.last <= pf.freeze_line;
       let tag, tcls, note;
-      if (frozen) { tag = "冻结(设计)"; tcls = "ok-tag"; note = `末日 ${esc(pp.last)} · 冻结线处,按 FROZEN 规则不再延展`; }
+      if (pp.mode === "fixed") {
+        tag = "固定窗口(设计)"; tcls = "ok-tag";
+        note = `末日 ${esc(pp.last)} · 5 折研究 vintage 固定止于末折测试窗(2026-06-01),不追最新;折6 的 cat/tri 延展在 tri_panel.parquet`;
+      }
+      else if (pp.mode === "frozen") {
+        tag = "冻结存档(设计)"; tcls = "ok-tag";
+        note = `末日 ${esc(pp.last)} · 冻结线处,按 FROZEN 规则 2027-01-01 前只读不扩`;
+      }
       else if (pp.behind == null || pp.behind <= 0) { tag = "✅ 新鲜"; tcls = "ok-tag"; note = `末日 ${esc(pp.last)} = 最新交易日`; }
-      else { tag = `⚠ 落后 ${pp.behind} 交易日`; tcls = "err-tag"; note = `末日 ${esc(pp.last)} · 应延展到 ${esc(pf.latest_date || "最新")}`; }
+      else { tag = `⚠ 落后 ${pp.behind} 交易日`; tcls = "err-tag"; note = `末日 ${esc(pp.last)} · 应到 ${esc(pf.latest_date || "最新")} —— 盘后链(2b1 步)在下一交易日自动延展(oos_fold_extend --append,预测冻结不重训);持续落后可手动补跑: .venv/bin/python src/oos_fold_extend.py --append`; }
       return `<tr><td><b>${esc(pp.name)}</b></td><td>${esc(pp.last || "—")}</td><td><span class="tag ${tcls}">${tag}</span></td><td class="dim">${esc(pp.desc)}</td><td class="dim">${note}</td></tr>`;
     }).join("");
     html += `<div class="card"><h3>OOS 面板数据末日<span class="tag warn-tag">冻结线 ${esc(pf.freeze_line || "—")}</span></h3>
       <div class="table-scroll"><table class="grid-tbl"><thead><tr><th>面板</th><th>数据末日</th><th>状态</th><th>性质</th><th>说明</th></tr></thead><tbody>${pRows}</tbody></table></div>
-      <p class="dim">冻结线 = fold6 分界 ${esc(pf.freeze_line || "—")}(模型训练从未见过的数据分界线);最新交易日 = data/panel.parquet 末日 ${esc(pf.latest_date || "—")}。落后 = 末日与最新交易日之间的交易日数。oos_earnings 由 oos_fold_extend.py 每周延展(预测冻结不重训);model_family_oos 随研究流水线刷新;oos_final 为生产冻结 OOS,停在冻结线属设计行为。</p>
+      <p class="dim">三面板各司其职:<b>oos_earnings</b>(live)= 生产信号面板,panel 出现新交易日即由盘后链自动延展(oos_fold_extend --append,预测冻结不重训),它是唯一需要新鲜的;<b>model_family_oos</b>(fixed)= 研究候选面板(cat/tri 等非生产模型),5 折测试窗固定止于 2026-06-01,末日 ≈05-29 属设计,折6 的 cat/tri 延展在 tri_panel.parquet;<b>oos_final</b>(frozen)= 冻结存档,FROZEN 规则 2027-01-01 前只读。冻结线 = fold6 分界 ${esc(pf.freeze_line || "—")}(模型训练从未见过的数据分界线);「落后」仅对 oos_earnings 有意义 = 末日与最新交易日(panel 末日 ${esc(pf.latest_date || "—")})之间的交易日数,盘后链 2b1 步自动延展。</p>
     </div>`;
   }
 
@@ -287,27 +415,7 @@ async function renderOverview() {
       dl.appendChild(o);
     }
   }
-  const benchIn = document.getElementById("ovBench");
-  if (benchIn) {
-    benchIn.addEventListener("change", async (ev) => {
-      const sym = (ev.target.value || "").trim().toUpperCase();
-      if (!sym) return;
-      localStorage.setItem("ov_bench_sym", sym);
-      try {
-        const nd = await api(`/api/overview/equity?symbol=${encodeURIComponent(sym)}`);
-        window.OV_EQ = nd;
-        const used = (nd && nd.bench_symbol) || sym;
-        if (nd && nd.available && nd.points.length) ovDrawCurve();
-        const tag = document.getElementById("ovBenchTag");
-        if (tag) tag.textContent = `绿=V2 生产 · 琥珀虚线=V2裸(无覆盖) · 灰点=基准(${used})`;
-        const h3 = document.querySelector("#page-overview h3");
-        if (h3) h3.textContent = `净值曲线 · V2 生产 / V2裸 / ${used}(三线同图)`;
-        if (nd && !nd.available) toast(`基准 ${used} 无行情数据`, false);
-      } catch (err) {
-        toast("基准切换失败: " + err.message, false);
-      }
-    });
-  }
+  attachBenchListeners();
 
   if (eq.available && eq.points.length) {
     window.OV_EQ = eq;
@@ -401,6 +509,137 @@ function ovDrawCurve() {
           ticks: { color: "#8a94a8", callback: (v) => fmt(v, 0) + "%" } },
       } } });
 }
+
+/* ── 01 研究流水线(一键研究 + 训练/回测/自进化/特征 子区) ────────── */
+const RS_ZONES = [
+  ["train", "模型训练", "多管线训练 · 批量对比"],
+  ["backtest", "策略回测", "资金曲线 · 绩效评估(含全景 OOS / 滚动复核)"],
+  ["evolve", "模型自进化", "调度 · 重训 · 竞技场"],
+  ["pipeline", "候选特征流水线", "挖掘 → 复核 → 竞技场"],
+];
+const RS_STEPS_QUICK = [["check", "模型自检"], ["feature", "特征筛查"], ["evolve", "自我进化"], ["bt", "回测"], ["suggest", "新方向建议"]];
+const RS_STEPS_FULL = [["check", "模型自检"], ["mine", "特征挖掘"], ["feature", "特征复核"], ["phase0", "标签冗余度"], ["arena", "竞技场"], ["retrain", "重训"], ["bt", "回测"], ["suggest", "新方向建议"]];
+
+async function renderResearch() {
+  pollDrop("rs");
+  const el = pageEl("research");
+  el.innerHTML = `<div class="loading">加载研究流水线…</div>`;
+  let st;
+  try { st = await api("/api/research/status"); } catch (_) { st = { job: {}, state: {} }; }
+  el.innerHTML = researchShell(st);
+  loadResearchReport();
+  const active = !!(st.job && st.job.active);
+  if (active) {
+    pollSet("rs", async () => {
+      try {
+        const r = await api("/api/research/status");
+        const stepsEl = document.querySelector(".rs-steps");
+        if (stepsEl) stepsEl.innerHTML = rsStepsHtml(r.state || {});
+        const lc = document.getElementById("rsLog");
+        if (lc) { lc.textContent = ((r.state || {}).log_tail || []).join("\n"); lc.scrollTop = lc.scrollHeight; }
+        const box = document.getElementById("rsReport");
+        if (box) renderResearchReport(box, r.state || {});
+        if (!(r.job && r.job.active)) { renderResearch(); }
+      } catch (_) {}
+    }, 2500);
+  } else {
+    pollSet("hdr", pollHeader, 4000);
+  }
+}
+
+function rsStepsHtml(state) {
+  const cur = state.phase || "";
+  const done = state.done || [];
+  const steps = (state.mode === "full" ? RS_STEPS_FULL : RS_STEPS_QUICK);
+  return steps.map(([k, label]) => {
+    const cls = done.includes(k) ? "done" : (cur === k ? "active" : "");
+    const icon = done.includes(k) ? "✓" : (cur === k ? "…" : "○");
+    return `<div class="rs-step ${cls}"><i>${icon}</i><span>${label}</span></div>`;
+  }).join("");
+}
+
+function researchShell(st) {
+  const job = (st && st.job) || {};
+  const state = (st && st.state) || {};
+  const mode = (state.mode === "full") ? "full" : "quick";
+  const prevDone = (state.done || []).length;
+  const prevInterrupted = state.phase_label && !!(state.phase_label || "").startsWith("中断") && prevDone > 0;
+  const stepsTag = mode === "full" ? "自检 → 挖掘 → 复核 → 竞技场 → 重训 → 回测 → 新方向" : "自检 → 特征 → 进化 → 回测 → 新方向";
+  const hint = mode === "full"
+    ? "顺序: ①模型自检(健康/死亡/衰减/参数体检) ②特征挖掘(auto_feature_mining 交互候选) ③特征全量复核(9 起点 + 打乱对照 + AGENTS 登记) ④标签冗余度地图(Phase 0, 正交训练前置) ⑤竞技场(model_arena 选股 + 止盈/止损/时点三角色,双窗口对决) ⑥重训(选股 IC 退化才重训;角色读竞技场胜出候选,护栏通过才切换) ⑦回测(Top30 · V2 · SPY 对照) ⑧聚合新方向建议。总耗时数小时,建议周末跑;日志实时滚动,各子环节完整详情在下方分区。"
+    : "顺序: ①模型自检(健康/死亡/衰减/参数体检) ②特征筛查(待审候选 9 起点复核) ③自我进化(只读重训检查) ④回测(Top30 · V2 · SPY 对照) ⑤聚合新方向建议。总耗时约 3-10 分钟,日志实时滚动;重训/竞技场等训练类任务在下方分区手动跑,各子环节完整详情也在分区。";
+  return `<div class="card"><h3>一键研究流水线<span class="tag ${mode === "full" ? "danger-tag" : "warn-tag"}">${stepsTag}</span></h3>
+    ${busySection(job)}
+    <div class="rs-steps">${rsStepsHtml(state)}</div>
+    ${logConsole("rsLog")}
+    <div class="btn-row">
+      <button class="btn primary" onclick="startResearch('quick')">🚀 快速版</button>
+      <button class="btn danger" onclick="startResearch('full')">🛠 全量版(挖掘·竞技场·重训)</button>
+      ${prevInterrupted ? `<button class="btn" onclick="startResearch('full', { resume: true })">🔄 续跑(上次中断处)</button>` : ""}
+      <button class="btn" onclick="stopResearch()">停止</button>
+    </div>
+    <div class="dim" style="margin:6px 0">跳过阶段(逗号分隔, 全量版用):
+      <input id="rsSkip" value="" placeholder="如 arena,retrain" style="width:180px"/>
+      <button class="btn" style="padding:2px 10px" onclick="startResearch('full', { skip: document.getElementById('rsSkip').value })">按跳过运行</button>
+    </div>
+    <p class="dim">${hint}</p></div>
+    <div id="rsReport"></div>
+    <div class="card"><h3>研究分区(内容与独立页一致,展开即用)</h3>
+      <div class="rs-zones">${RS_ZONES.map(([name, title, sub]) =>
+        `<details class="rs-zone" data-zone="${name}" ontoggle="researchZoneToggle('${name}')">
+          <summary><b>${title}</b><span class="dim">${sub}</span></summary>
+          <div class="rs-zone-body" id="rs-${name}"><div class="loading">展开后加载…</div></div></details>`).join("")}
+      </div></div>`;
+}
+
+function researchZoneToggle(name) {
+  document.querySelectorAll(".rs-zone").forEach(d => { if (d.dataset.zone !== name) d.open = false; });
+  const el = document.getElementById("rs-" + name);
+  if (!el || el.dataset.rendered) return;
+  el.dataset.rendered = "1";
+  PAGE_TARGET[name] = "rs-" + name;
+  const fns = { train: renderTrain, backtest: renderBacktest, evolve: renderEvolve, pipeline: renderPipeline };
+  (fns[name] || (() => {}))();
+}
+
+async function startResearch(mode, opts) {
+  mode = mode || "quick";
+  opts = opts || {};
+  try {
+    const r = await api("/api/research/start", { method: "POST", body: JSON.stringify({ mode, skip: opts.skip || "", resume: !!opts.resume }) });
+    toast(opts.resume ? "已从上次中断处续跑" : (mode === "full" ? "全量版已启动(数小时,建议周末)" : "快速版已启动(约 3-10 分钟)"));
+    renderResearch();
+  }
+  catch (e) { toast(e.message, false); }
+}
+async function stopResearch() {
+  try { const r = await api("/api/research/stop", { method: "POST" }); toast(r.ok ? "已停止一键研究" : "无运行中任务"); renderResearch(); }
+  catch (e) { toast(e.message, false); }
+}
+async function loadResearchReport() {
+  try {
+    const r = await api("/api/research/report");
+    const box = document.getElementById("rsReport");
+    if (!box || !r.available || !r.state) return;
+    renderResearchReport(box, r.state);
+  } catch (_) {}
+}
+function renderResearchReport(box, st) {
+  let h = "";
+  const sc = st.self_check || null;
+  if (sc && Object.keys(sc).length) {
+    h += `<div class="card"><h3>模型自检摘要</h3><table class="kv"><tbody>${
+      Object.entries(sc).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</tbody></table></div>`;
+  }
+  const sugs = st.suggestions || [];
+  h += `<div class="card"><h3>新方向建议(${sugs.length})<span class="tag">一键研究后自动聚合</span></h3>`
+    + (sugs.length
+      ? sugs.map(s => `<div class="sug ${esc(s.kind || "")}"><b>${esc(s.title)}</b><p>${esc(s.detail)}</p>${s.action ? `<span class="dim">→ ${esc(s.action)}</span>` : ""}</div>`).join("")
+      : `<p class="dim">运行一键研究后,自动从竞技场新冠军 / 特征缺口 / 参数漂移 / 模型对比 / 拟合判定聚合方向建议。</p>`)
+    + `</div>`;
+  box.innerHTML = h;
+}
+
 
 /* ── 01 模型训练 ──────────────────────────────────────────────────── */
 async function renderTrain() {
@@ -634,7 +873,12 @@ async function renderBacktest() {
       <label>波动率目标(如 0.15) <input id="btVt" placeholder="留空=无" value="${esc(def.vt_target)}"></label>
       <label>Rank 退出阈值(如 75) <input id="btRank" placeholder="留空=无" value="${esc(def.rank_exit || "")}"></label>
       <label>起始日期(样本外窗口) <input id="btSince" type="date" value="${esc(def.since || "")}"></label>
-      <label class="chk"><input id="btV2" type="checkbox" ${def.v2 ? "checked" : ""}> 叠加 V2 风控(DD阶梯×IC,生产口径)</label>
+      <label>Benchmark(对照,如 SPY) <input id="btBench" placeholder="留空=无" value="${esc(def.benchmark || "")}"></label>
+      <label class="chk"><input id="btV2" type="checkbox" ${def.v2 ? "checked" : ""}> 叠加 V2 风控(DD阶梯×IC)</label>
+      <label>V2 恢复模式 <select id="btV2Recover">
+        <option value="prod" ${def.v2_recover !== "fast" ? "selected" : ""}>生产(0日立即恢复)</option>
+        <option value="fast" ${def.v2_recover === "fast" ? "selected" : ""}>立即恢复(0日无防抖)</option>
+      </select></label>
     </div>
     <div class="btn-row">
       <button class="btn primary" onclick="startBacktest()">运行回测</button>
@@ -703,22 +947,29 @@ async function renderBacktest() {
 
 function panoramaSection(panoSt, panoRep) {
   const st = panoSt.status || {};
-  const busy = st.active ? `<div class="busy-bar"><i class="spin"></i> 全景 OOS 运行中(3 引擎 × 双窗口,约 1-3 分钟)</div>` : "";
-  return `<div class="card"><h3>全景 OOS 统一验证(3 引擎 × 双窗口)<span class="tag warn-tag">统一口径</span></h3>
+  const busy = st.active ? `<div class="busy-bar"><i class="spin"></i> 全景 OOS 运行中(引擎注册表 × 双窗口,约 1-4 分钟)</div>` : "";
+  return `<div class="card"><h3>全景 OOS 统一验证(引擎注册表 × 双窗口)<span class="tag warn-tag">统一口径</span></h3>
     ${busy}
     <div class="form-grid inline">
       <label>Top-K <input id="panoK" type="number" value="${st.job ? (st.job.label.match(/Top(\d+)/) || [0, 30])[1] : 30}" min="5" max="200"></label>
       <label>ATR 倍数 <input id="panoAtr" placeholder="留空=生产裸基座" value=""></label>
-      <label>DD 门控 <input id="panoDd" placeholder="如 0.08" value="0.08"></label>
+      <label>DD 门控 <input id="panoDd" placeholder="留空=无门控" value=""></label>
       <label>折6窗口月数 <input id="panoMonths" type="number" value="6" min="3" max="12"></label>
       <label>参考折6 Sharpe <input id="panoRef" placeholder="留空=ATR 绝对阈值" value=""></label>
-      <label class="chk"><input id="panoV2" type="checkbox" title="生产口径 V2 风控(DD阶梯×IC): ①champion ②canonical 生效;③unified 自带 DD8 门控,不叠加"> 叠加 V2 风控(DD阶梯×IC,生产口径)</label>
+      <label>Benchmark <input id="panoBench" placeholder="如 SPY(买入持有对照)" value=""></label>
+      <label class="chk"><input id="panoV2" type="checkbox" title="追加 V2 生产风控引擎(DD阶梯×IC): 生成 champion_stop+V2 / canonical+V2 独立条目,与裸引擎并排对比"> 追加 V2 生产风控引擎(DD阶梯×IC)</label>
+      <label>V2 恢复模式 <select id="panoV2Recover">
+        <option value="prod">生产(现0日立即恢复)</option>
+        <option value="prod,fast">生产 + 立即恢复(0日)对照</option>
+        <option value="prod,0,2,5,10">恢复天数扫描(0/2/5/10)</option>
+        <option value="fast">仅立即恢复(0日)</option>
+      </select><span class="dim" style="font-size:11px">DD 回撤恢复确认天数,每项生成一独立 V2 引擎行并排对比</span></label>
     </div>
     <div class="btn-row">
       <button class="btn primary" onclick="startPanorama()">运行全景 OOS</button>
       <button class="btn danger" onclick="stopPanorama()">停止</button>
     </div>
-    <p class="dim">三个引擎在相同数据、相同 OOS 冻结起点(预测表末日−N月)上并排:① champion_stop 生产口径 ② canonical(golden_benchmark_v2) 冻结判定权威 ③ unified_nav_engine 实验口径。每引擎跑全窗口 + 折6样本外,ratio>1.4 判疑似拟合。</p>
+    <p class="dim">引擎注册表: 裸引擎(champion_stop 生产信号 / canonical 生产权威 / unified_nav 实验口径)在相同数据、相同 OOS 冻结起点(预测表末日−N月)上并排;勾选 V2 追加 DD阶梯×IC 生产风控变体,填 Benchmark 追加买入持有对照。每引擎跑全窗口 + 折6样本外,ratio>1.4 判疑似拟合。unified 已截断到预测表末日,三引擎窗口完全一致。</p>
     ${panoramaDiffPanel()}
     ${logConsole("panoLog")}
   </div>`;
@@ -726,22 +977,20 @@ function panoramaSection(panoSt, panoRep) {
 
 
 function panoramaDiffPanel() {
-  const R = (dim, a, b, c) => `<tr><td class="dim"><b>${dim}</b></td><td>${a}</td><td>${b}</td><td>${c}</td></tr>`;
-  return `<details class="cmp"><summary>为什么三个引擎的数字不同?配置口径逐项对照</summary>
-    <div class="table-scroll"><table class="grid-tbl cmp-tbl"><thead><tr><th>维度</th><th>① champion_stop(生产)</th><th>② canonical(golden_benchmark_v2)</th><th>③ unified_nav_engine(实验)</th></tr></thead><tbody>
-      ${R("职责", "逐日模拟 · 生产口径(外层 V2 暴露控制另算)", "冻结 V1 判定权威引擎", "统一净值/退出机制实验")}
-      ${R("数据装配", "cs.load()(OOS 面板,含 ens/lgb 信号列)", "同 ①,同一份 m_full 输入", "自带 une.load_data()(oos_earnings+panel 重装配,含 atr_14;外部 m 被忽略 → 行集与 ①② 不同)")}
-      ${R("成本", "0.2%/边(COST 常量;换仓日全额,止损按比例)", "20 bps/边", "引擎自带成本配置")}
-      ${R("成交时点", "信号次日收盘成交(fill_at_close 默认关,保守)", "信号当日收盘成交(FILL_AT_CLOSE=True,与实盘一致)", "引擎自有成交逻辑")}
-      ${R("个股止损", "ATR×atr_mult;全景默认 null → 无个股止损", "ATR_MULT=0 → 无个股止损", "exit_baseline(基线退出含 ATR 止损等)")}
-      ${R("排名退出/VT", "全景默认关(rank_exit / vt 均未开)", "RANK_EXIT=0、VT_TGT=None → 关", "Baseline 退出,无该层")}
-      ${R("净值 DD 门控", "dd_thresh=1.0 → 关(生产由外层 V2 DD×IC 阶梯覆盖)", "DD8=0 → 关", "<b>use_dd8=True → DD8 降半门控开(0.5)</b>")}
-      ${R("调仓节奏", "HORIZON=60 交易日整仓换 + 退出不补位(replace=False)", "REBAL=60 整仓轮换", "引擎自有的 60 日再平衡 + 逐日退出")}
-      ${R("范围过滤", "exclude_leveraged + exclude_crypto = True", "未做该类过滤", "未做该类过滤(面板为准)")}
-      ${R("逐日序列", "有 daily → 资金曲线可画", "无日序列(curve 用其它引擎对照)", "有 daily → 资金曲线可画")}
+  const R = (dim, a, b, c, d) => `<tr><td class="dim"><b>${dim}</b></td><td>${a}</td><td>${b}</td><td>${c}</td><td>${d}</td></tr>`;
+  return `<details class="cmp"><summary>为什么引擎的数字不同?口径逐项对照(引擎集合由注册表构建,可增删)</summary>
+    <div class="table-scroll"><table class="grid-tbl cmp-tbl"><thead><tr><th>维度</th><th>champion_stop</th><th>canonical</th><th>unified_nav</th><th>V2 变体 / benchmark</th></tr></thead><tbody>
+      ${R("职责", "生产信号引擎(逐日模拟)", "生产权威 NAV 引擎(冻结判定)", "实验口径(退出/门控研究)", "V2=裸引擎×生产暴露;benchmark=买入持有对照")}
+      ${R("数据装配", "cs.load()(OOS 面板 + panel + atr)", "同 champion,同一份 m_full 输入", "une.load_data() 但<B>已截断到预测表末日</B>,窗口与①②一致", "与裸引擎同源;benchmark 取 panel 单标的 Close")}
+      ${R("成本", "0.2%/边(COST 常量)", "20 bps/边", "引擎自带成本配置", "V2 继承裸引擎;benchmark 0 成本")}
+      ${R("成交时点", "信号次日收盘成交(保守)", "信号当日收盘成交(FILL_AT_CLOSE,与实盘一致)", "引擎自有成交逻辑", "V2 继承裸引擎")}
+      ${R("个股止损", "ATR×atr_mult;默认 null → 无", "ATR_MULT=0 → 无", "exit_baseline 含 ATR 止损", "V2 继承裸引擎")}
+      ${R("净值 DD 门控", "dd 参数: 无门控 / DD8 / 自定义(生产由 V2 覆盖)", "同 champion(dd 透传 DD8)", "use_dd8=True → DD8 降半门控", "V2=DD阶梯×IC 复合暴露(risk_control_v2)")}
+      ${R("调仓节奏", "60 交易日整仓换 + 退出不补位", "REBAL=60 整仓轮换", "60 日再平衡 + 逐日退出", "—")}
+      ${R("范围过滤", "exclude_leveraged + exclude_crypto", "未做该类过滤", "未做该类过滤", "benchmark 单标的无过滤")}
     </tbody></table></div>
-    <p class="dim"><b>一句话结论:</b>数字不同的主因 = ③ 用自己的数据装配(①② 才是同一份输入)、③ 默认开着 DD8 门控而 ①② 全景默认关(需显式传 --dd)、② 当日收盘成交而 ① 保守次日成交、① 还带杠杆/加密过滤。对照后 ① vs ② 的残差主要来自成交时点与换仓口径,② vs ③ 的残差来自门控与数据装配。</p>
-    <p class="dim"><b>为什么不能统一成一个:</b>三者角色互斥,不是重复实现 —— ① 是<b>生产执行口径</b>,必须与 champion.py / V2 暴露 / 实盘回放严格同构,改它等于改上线行为;② 是<b>冻结裁判</b>(FROZEN_CHAMPION_V1 冻结于 2026-08-25, 引擎 canonical_nav v2, 规则「新特征必须过 canonical 全量消融」),裁判一动就失去判定资格 —— 2026-08-26 look-ahead 修复曾推翻旧结论,证明引擎语义变化会动摇所有历史判定;③ 是<b>实验沙箱</b>(退出/门控研究),参数天天改。合成一个「超集引擎」更危险:共享代码一处改动会同时污染生产(上线风险)与裁判(冻结失效);且三者数据契约不同(cs.load vs une.load_data、signal 列 vs lgb_60、有无逐日序列),统一意味着重写全部下游消费者(周报/推送/OOS 面板/golden 报告)。<b>本页就是「统一」的正确形态:统一评估协议(同一数据 · 同一 OOS 冻结起点 · 同一判定标准),而非统一实现。</b></p></details>`;
+    <p class="dim"><b>一句话结论:</b>数字差异来源 = 成交时点(champion 次日 vs canonical 当日)、个股止损(unified 有 ATR 止损)、DD 门控(unified 默认开 DD8)与范围过滤。V2 变体与对应裸引擎的差 = 纯生产风控(DD阶梯×IC)贡献;benchmark 与策略的差 = alpha 含量。</p>
+  </details>`;
 }
 
 async function startPanorama() {
@@ -752,8 +1001,10 @@ async function startPanorama() {
       dd_thresh: $("#panoDd").value || null,
       months: parseInt($("#panoMonths").value, 10) || 6,
       ref_oos_sharpe: $("#panoRef").value || null,
-      v2: $("#panoV2") ? $("#panoV2").checked : false }) });
-    toast(`全景 OOS 已启动(Top${r.k})`);
+      v2: $("#panoV2") ? $("#panoV2").checked : false,
+      v2_recover: $("#panoV2Recover") ? $("#panoV2Recover").value : "prod",
+      benchmark: $("#panoBench") ? ($("#panoBench").value || "").trim() : "" }) });
+    toast(`全景 OOS 已启动(Top${r.k} × ${r.n_engines}引擎)`);
     renderBacktest();
   } catch (e) { toast(e.message, false); }
 }
@@ -770,48 +1021,58 @@ async function loadPanoReport() {
     const rep = r.report;
     const p = rep.params || {};
     const anyV2 = (rep.engines || []).some(e => e.v2);
-    let html = `<div class="card"><h3>全景对比(${esc(p.full_start)} → ${esc(p.full_end)} · 折6起点 ${esc(p.oos_cut)} · ${esc(p.oos_days)} 天${p.v2 ? " · 叠加 V2 风控(生产口径)" : ""})</h3>
+    const v2RecoverTxt = (p.v2 && p.v2_recover && String(p.v2_recover) !== "prod")
+      ? ` · V2 恢复模式: ${esc(p.v2_recover)}` : (p.v2 ? " · 叠加 V2 风控" : "");
+    let html = `<div class="card"><h3>全景对比(${esc(p.full_start)} → ${esc(p.full_end)} · 折6起点 ${esc(p.oos_cut)} · ${esc(p.oos_days)} 天${v2RecoverTxt})</h3>
       <table class="grid-tbl"><thead><tr><th>引擎</th><th>全窗 Sharpe</th><th>全窗 MDD</th><th>全窗累计</th><th>折6 Sharpe</th><th>折6 MDD</th><th>折6累计</th>${anyV2 ? `<th>V2 暴露(均/末)</th>` : ""}<th>ratio</th><th>判定</th></tr></thead><tbody>`;
     for (const e of rep.engines || []) {
       const verdictCls = e.fitted ? "red" : "green";
       html += `<tr><td><b>${esc(e.label)}</b></td>
         <td>${fmt(e.full.sharpe, 2)}</td><td>${fmtPct(e.full.mdd)}</td><td>${fmtPct(e.full.cum, 0)}</td>
         <td>${fmt(e.oos.sharpe, 2)}</td><td>${fmtPct(e.oos.mdd)}</td><td>${fmtPct(e.oos.cum, 0)}</td>
-        ${anyV2 ? `<td>${e.v2 ? fmtP(e.v2.mean_exposure, 0) + " / " + fmtP(e.v2.last_exposure, 0) + (e.v2.ic_fallback ? " ⚠IC回退" : "") : `<span class="dim">自带门控</span>`}</td>` : ""}
+        ${anyV2 ? `<td>${e.v2 ? fmtP(e.v2.mean_exposure, 0) + " / " + fmtP(e.v2.last_exposure, 0) + (e.v2.ic_fallback ? " ⚠IC回退" : "") : (e.benchmark ? `<span class="dim">对照</span>` : `<span class="dim">—</span>`)}</td>` : ""}
         <td>${fmt(e.ratio, 2)}</td><td class="${verdictCls}">${esc(e.verdict)}</td></tr>`;
     }
     html += `</tbody></table>
-      <p class="dim">判定规则(dual_validate): 全窗口Sharpe / 折6Sharpe > 1.4 → 疑似拟合;引擎间差异来自成本模型/退出规则/门控实现,并排对照可定位口径偏差。${p.v2 ? "V2 覆盖 = 裸引擎日收益 × 生产 DD阶梯×IC 复合暴露(risk_control_v2,与单回测 --v2 同源);③unified 自带 DD8 门控不叠加。" : ""}</p></div>`;
-    const first = (rep.engines || [])[0];
-    if (first && first.full) {
-      html += `<div class="card"><h3>各引擎资金曲线(实线=全窗口 · 虚线=OOS 窗口,起点归 1)</h3>
-        <p class="dim" style="margin:0">OOS 窗口 = 折6起点 ${esc(p.oos_cut || "")} 之后(${esc(p.oos_days || "")} 天);虚线各自从 1.0 起算,比较的是 OOS 段的斜率与形态,不是绝对水平(全窗线到该时点已是累计净值)。</p>
-        <canvas id="panoEquity"></canvas></div>`;
+      <p class="dim">判定规则(dual_validate): 全窗口Sharpe / 折6Sharpe > 1.4 → 疑似拟合;引擎间差异来自成本模型/退出规则/门控实现,并排对照可定位口径偏差。${p.v2 ? `V2 引擎 = 裸引擎日收益 × DD阶梯×IC 复合暴露(risk_control_v2,与单回测 --v2 同源),与裸引擎并排展示;${p.v2_recover && String(p.v2_recover) !== "prod" ? `本次恢复模式对照(${esc(p.v2_recover)}): 防抖越长恢复越慢, 0日=立即恢复 —— 并排行差 = 恢复滞后成本。` : "生产恢复防抖(现=0日)。"}unified 自带 DD8 门控,无 V2 变体。` : ""}${p.benchmark ? ` benchmark:${esc(p.benchmark)} = 买入持有(0成本),不参与拟合判定。` : ""}</p></div>`;
+    if ((rep.engines || []).length && (rep.engines || [])[0].full) {
+      html += `<div class="card"><h3>资金曲线 · 全窗口(起点归 1)</h3>
+        <p class="dim" style="margin:0">${esc(p.full_start || "")} → ${esc(p.full_end || "")}(${esc((rep.engines || [])[0].full.n_days || "")} 天);同图叠加所有引擎。</p>
+        <canvas id="panoEquityFull"></canvas></div>`;
+      html += `<div class="card"><h3>资金曲线 · 折6 OOS 窗口(起点归 1 · 放大)</h3>
+        <p class="dim" style="margin:0">折6起点 ${esc(p.oos_cut || "")} 之后(${esc(p.oos_days || "")} 天),单独成图看清样本外斜率与形态。</p>
+        <canvas id="panoEquityOos"></canvas></div>`;
     }
     box.innerHTML = html;
     const cv = rep.curves || {};
     const keys = Object.keys(cv);
-    if (keys.length) {
-      // 共享日期轴: 全部曲线按日期对齐(缺失日期补 null)
-      const allDates = [...new Set(keys.flatMap(k => cv[k].map(p => p.date)))].sort();
-      const idxOf = {}; allDates.forEach((d, i) => { idxOf[d] = i; });
-      const align = arr => { const out = new Array(allDates.length).fill(null); arr.forEach(p => { out[idxOf[p.date]] = p.eq; }); return out; };
-      const palette = ["#4ade80", "#fbbf24", "#60a5fa"];
-      const colorOf = {}; let ci = 0;
-      const ds = [];
-      for (const k of keys) {
+    const palette = ["#4ade80", "#fbbf24", "#60a5fa", "#f472b6", "#a78bfa", "#34d399", "#f87171", "#22d3ee", "#94a3b8"];
+    const colorOf = {}; let ci = 0;
+    const colorFor = base => {
+      if (!(base in colorOf)) colorOf[base] = palette[ci++ % palette.length];
+      return colorOf[base];
+    };
+    const alignTo = (dates, arr) => {
+      const idxOf = {}; dates.forEach((d, i) => { idxOf[d] = i; });
+      const out = new Array(dates.length).fill(null); arr.forEach(p => { if (p.date in idxOf) out[idxOf[p.date]] = p.eq; }); return out;
+    };
+    const draw = (canvasId, keyFilter, labelSuffix) => {
+      const ks = keys.filter(k => keyFilter(k));
+      if (!ks.length) return;
+      const allDates = [...new Set(ks.flatMap(k => cv[k].map(p => p.date)))].sort();
+      const ds = ks.map(k => {
         const base = k.replace(/_oos$/, "");
-        if (!(base in colorOf)) colorOf[base] = palette[ci++ % palette.length];
-        const isOos = k.endsWith("_oos");
-        ds.push({ label: isOos ? base + " · OOS" : base + " · 全窗",
-          data: align(cv[k]), borderColor: colorOf[base],
-          borderDash: isOos ? [6, 4] : [], pointRadius: 0, borderWidth: 1.5, spanGaps: false });
-      }
-      chart("panoEquity", { type: "line", data: { labels: allDates, datasets: ds },
+        return { label: base + labelSuffix, data: alignTo(allDates, cv[k]),
+          borderColor: colorFor(base), pointRadius: 0, borderWidth: 1.5, spanGaps: false };
+      });
+      chart(canvasId, { type: "line", data: { labels: allDates, datasets: ds },
         options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
           plugins: { legend: { labels: CHART_STYLE } },
           scales: { x: { grid: CHART_STYLE.grid, ticks: { color: "#8a94a8", maxTicksLimit: 10 } }, y: { grid: CHART_STYLE.grid, ticks: CHART_STYLE.ticks } } } });
-    }
+    };
+    // 拆双图: 全窗口 = 非 _oos 曲线;OOS = 仅 _oos 曲线(单独放大)
+    draw("panoEquityFull", k => !k.endsWith("_oos"), "");
+    draw("panoEquityOos", k => k.endsWith("_oos"), " · OOS");
   } catch (_) {}
 }
 
@@ -830,19 +1091,39 @@ async function loadBtReport() {
     BT_REPORT = rep;
     const m = rep.metrics || {};
     const v2m = rep.metrics_v2 || {};
-    const tiles = [
-      tile("Sharpe", fmt(m.sharpe, 2), `Sortino ${fmt(m.sortino, 2)}`, m.sharpe > 2 ? "green" : "amber"),
-      tile("累计收益", fmtPct(m.cum, 0), `${esc(rep.period.start)} → ${esc(rep.period.end)} (${esc(rep.period.n_days)}天)`, "green"),
-      tile("最大回撤", fmtPct(m.mdd), `2022 段 ${fmtPct(m.mdd_2022)}`, m.mdd < -0.15 ? "red" : "amber"),
-      tile("Calmar", fmt(m.calmar, 2), `Recovery ${fmt(m.recovery_factor, 1)}`, "green"),
-      tile("盈亏比 PF", fmt(m.profit_factor, 2), `胜率 ${fmtP(m.win_rate, 0)}`, "green"),
-      tile("交易统计", `${esc(m.trade_n)} 笔`, `胜率 ${fmtP(m.trade_win_rate, 0)} · 未平 ${esc(m.trade_open)}`, "green"),
-      tile("换手/年", fmt(m.turnover_yr, 1) + "x", `平均持仓 ${fmt(m.avg_held, 1)} 只`, ""),
-      tile("止损/止盈", `${esc(m.stops)} / ${esc(m.tp_hits)} 次`, `重平衡 ${esc(m.rebal)} 次`, ""),
+    const hasV2 = v2m.sharpe != null;
+    const bm = rep.benchmark || null;
+    const bmSym = bm ? String(bm.symbol || "").toUpperCase() : "";
+    const cmpCols = [["sharpe", "Sharpe"], ["sortino", "Sortino"], ["cum", "累计收益"],
+      ["mdd", "最大回撤"], ["profit_factor", "盈亏比 PF"], ["win_rate", "日胜率"]];
+    const cell = (row, k) => {
+      const v = row ? row[k] : null;
+      if (v == null) return `<span class="dim">—</span>`;
+      if (k === "sharpe" || k === "sortino") return fmt(v, 2);
+      if (k === "mdd") return fmtPct(v);
+      if (k === "cum") return fmtPct(v, 0);
+      if (k === "profit_factor") return fmt(v, 2);
+      return fmtP(v, 0);
+    };
+    const cmpRow = (label, sub, row, strong) => `<tr><td><b>${label}</b>${sub ? `<div class="dim" style="font-weight:normal;font-size:11px">${sub}</div>` : ""}</td>${
+      cmpCols.map(([k]) => `<td>${strong ? `<b>${cell(row, k)}</b>` : cell(row, k)}</td>`).join("")}</tr>`;
+    const topNote = rep.period ? `${esc(rep.period.start)} → ${esc(rep.period.end)} (${esc(rep.period.n_days)}天)` : "";
+    const kvRow = ([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`;
+    const detailPairs = [
+      ["Calmar", fmt(m.calmar, 2)], ["恢复因子", fmt(m.recovery_factor, 1)],
+      ["最长回撤天数", `${esc(m.longest_dd_days ?? "—")} 天`], ["2022 段回撤", fmtPct(m.mdd_2022)],
+      ["交易数", `${esc(m.trade_n ?? "—")} 笔`], ["交易胜率", fmtP(m.trade_win_rate, 0)],
+      ["未平仓", esc(m.trade_open ?? "—")], ["交易级 PF", m.trade_pf == null ? "—" : fmt(m.trade_pf, 2)],
+      ["换手/年", isBad(m.turnover_yr) ? "—" : fmt(m.turnover_yr, 1) + "x"],
+      ["平均持仓", isBad(m.avg_held) ? "—" : fmt(m.avg_held, 1) + " 只"],
+      ["止损 / 止盈", `${esc(m.stops ?? "—")} / ${esc(m.tp_hits ?? "—")} 次`], ["重平衡", `${esc(m.rebal ?? "—")} 次`],
     ];
-    if (v2m.sharpe != null) {
-      tiles.push(tile("V2 风控后 Sharpe", fmt(v2m.sharpe, 2), `MDD ${fmtPct(v2m.mdd)} · 累计 ${fmtPct(v2m.cum, 0)}`, "green"));
-      tiles.push(tile("V2 平均暴露", fmtP(rep.v2.mean_exposure, 0), rep.v2.ic_fallback ? "⚠ IC fallback" : `末日 ${fmtP(rep.v2.last_exposure, 0)}`, "amber"));
+    if (hasV2) {
+      const recoverZh = (rep.v2.recover === "fast") ? "立即恢复(0日)" : "生产(0日立即恢复)";
+      detailPairs.push(["V2 平均暴露", fmtP(rep.v2.mean_exposure, 0)],
+        ["V2 末日暴露", fmtP(rep.v2.last_exposure, 0)],
+        ["V2 恢复模式", recoverZh]);
+      if (rep.v2.ic_fallback) detailPairs.push(["IC 回退", "⚠ 已启用"]);
     }
     let html = `<div class="card export-row"><h3 style="margin:0">回测报告</h3>
       <div class="btn-row">
@@ -850,21 +1131,36 @@ async function loadBtReport() {
         <button class="btn small" onclick="exportBtReport('pdf')">导出 PDF</button>
         <button class="btn small" onclick="exportBtReport('png')">导出 PNG</button>
       </div>
-      <p class="dim" style="margin:0">指标 + 年度分解 + 资金曲线(源 output/web_backtest_report.json)</p></div>
-      <div class="grid tiles">${tiles.join("")}</div>
-      <div class="card"><h3>资金曲线(日收益复利)</h3><canvas id="btEquity"></canvas></div>
-      <div class="grid two">
-      <div class="card"><h3>年度分解</h3><table class="grid-tbl"><thead><tr><th>年</th><th>天数</th><th>Sharpe</th><th>累计</th><th>MDD</th></tr></thead><tbody>${
+      <p class="dim" style="margin:0">指标 + 年度分解 + 资金曲线(源 output/web_backtest_report.json)</p></div>`;
+    html += `<div class="card"><h3>风控前后对比<span class="tag">风控后 = × V2 生产暴露(DD阶梯×IC)</span></h3>
+      <div class="table-scroll"><table class="grid-tbl cmp-tbl"><thead><tr><th>口径</th>${cmpCols.map(([, h]) => `<th>${h}</th>`).join("")}</tr></thead><tbody>
+      ${cmpRow("风控前 · 引擎口径", topNote, m, true)}
+      ${hasV2 ? cmpRow("风控后 · ×V2 暴露", `平均暴露 ${fmtP(rep.v2.mean_exposure, 0)} · 末日 ${fmtP(rep.v2.last_exposure, 0)}${rep.v2.ic_fallback ? " · ⚠ IC回退" : ""}`, v2m, false)
+        : `<tr><td colspan="7" class="dim">未勾选「叠加 V2 风控」→ 只显示引擎口径;勾选后重跑可出现风控后行</td></tr>`}
+      ${bm ? cmpRow(`benchmark:${esc(bmSym)} · 买入持有`, "0 成本 · 对照,不参与拟合判定", bm, false) : ""}
+      </tbody></table>
+      <p class="dim" style="margin:0">PF / 日胜率按交易日口径(与资金曲线同源);风控前 vs 风控后差异 = 生产 DD阶梯×IC 暴露的贡献;benchmark 为同窗口市场对照。⚠ 风控后累计/Sharpe 高于风控前,是暴露<b>择时降仓</b>(跌得越深降得越低、模型转强再恢复)躲掉 -51% 级深回撤保住复利所致,非放大收益(暴露 0.07–1.0 无杠杆);3406% 为模拟口径,假设暴露每日零摩擦精确缩放,真实调仓有滑点/手续费会低于此值。</p></div>`;
+    html += `<div class="grid two">
+      <div class="card"><h3>年度分解</h3>
+        <table class="grid-tbl"><thead><tr><th>年</th><th>天数</th><th>Sharpe</th><th>累计</th><th>MDD</th></tr></thead><tbody>${
         (rep.yearly || []).map(y => `<tr><td>${y.year}</td><td>${y.n_days}</td><td>${fmt(y.sharpe, 2)}</td><td>${fmtPct(y.cum, 0)}</td><td>${fmtPct(y.mdd)}</td></tr>`).join("") || `<tr><td colspan="5" class="dim">—</td></tr>`
-      }</tbody></table></div>
-      <div class="card"><h3>运行参数</h3><table class="kv"><tbody>
-        ${Object.entries(rep.params || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}
-      </tbody></table></div></div>`;
+      }</tbody></table>
+      ${hasV2 && (v2m.yearly || []).length ? `<h4 class="dim" style="margin:12px 0 4px">风控后年度(V2)</h4><table class="grid-tbl"><thead><tr><th>年</th><th>天数</th><th>Sharpe</th><th>累计</th><th>MDD</th></tr></thead><tbody>${
+        v2m.yearly.map(y => `<tr><td>${y.year}</td><td>${y.n_days}</td><td>${fmt(y.sharpe, 2)}</td><td>${fmtPct(y.cum, 0)}</td><td>${fmtPct(y.mdd)}</td></tr>`).join("")}</tbody></table>` : ""}
+      </div>
+      <div class="card"><h3>引擎与交易详情</h3><table class="kv"><tbody>${detailPairs.map(kvRow).join("")}</tbody></table></div></div>`;
+    html += `<div class="card"><h3>运行参数</h3><table class="kv"><tbody>
+      ${Object.entries(rep.params || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}
+    </tbody></table></div>`;
+    html += `<div class="card"><h3>资金曲线(日收益复利)</h3><canvas id="btEquity"></canvas></div>`;
     box.innerHTML = html;
     if (rep.equity && rep.equity.length) {
       const ds = [{ label: "净值(引擎口径)", data: rep.equity.map(p => p.eq), borderColor: "#4ade80", backgroundColor: "rgba(74,222,128,0.07)", fill: true, pointRadius: 0, borderWidth: 1.5 }];
       if (rep.equity_v2 && rep.equity_v2.length) {
         ds.push({ label: "净值(×V2 暴露)", data: rep.equity_v2.map(p => p.eq), borderColor: "#fbbf24", pointRadius: 0, borderWidth: 1.2 });
+      }
+      if (rep.equity_bench && rep.equity_bench.length && bmSym) {
+        ds.push({ label: `对照 ${esc(bmSym)}`, data: rep.equity_bench.map(p => p.eq), borderColor: "#94a3b8", borderDash: [5, 4], pointRadius: 0, borderWidth: 1.2 });
       }
       chart("btEquity", { type: "line", data: { labels: rep.equity.map(p => p.date), datasets: ds },
         options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
@@ -922,6 +1218,13 @@ function btMetricsPairs(rep) {
     a.push(["V2 MDD", fmtPct(v2m.mdd)]);
     a.push(["V2 累计", fmtPct(v2m.cum, 0)]);
     a.push(["V2 平均暴露", isBad(rep.v2 && rep.v2.mean_exposure) ? "—" : fmtP(rep.v2.mean_exposure, 0)]);
+  }
+  const bb = rep.benchmark || null;
+  if (bb && bb.sharpe != null) {
+    const tag = `benchmark:${String(bb.symbol || "").toUpperCase()}`;
+    a.push([tag + " Sharpe", fmt(bb.sharpe, 2)]);
+    a.push([tag + " 累计", fmtPct(bb.cum, 0)]);
+    a.push([tag + " MDD", fmtPct(bb.mdd)]);
   }
   return a;
 }
@@ -1125,7 +1428,9 @@ async function startBacktest() {
       vt_target: $("#btVt").value || null,
       rank_exit: $("#btRank").value || null,
       v2: $("#btV2").checked,
+      v2_recover: ($("#btV2Recover") ? $("#btV2Recover").value : "prod") || "prod",
       since: $("#btSince").value || "",
+      benchmark: ($("#btBench").value || "").trim(),
     }) });
     toast(`回测已启动 Top${r.k}`);
     renderBacktest();
@@ -1507,11 +1812,33 @@ async function stopSignals() {
 }
 
 /* ── 04 模拟实盘 ──────────────────────────────────────────────────── */
+/* 模拟账户指标: 按 equity_points 净值曲线计算(区别于总览卡片的 V2 生产净值口径) */
+function paperMetrics(points) {
+  if (!points || points.length < 2) return null;
+  const eqs = points.map(p => Number(p.equity)).filter(v => Number.isFinite(v) && v > 0);
+  if (eqs.length < 2) return null;
+  const rets = [];
+  for (let i = 1; i < eqs.length; i++) rets.push(eqs[i] / eqs[i - 1] - 1);
+  const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+  const sd = Math.sqrt(rets.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, rets.length - 1));
+  const sharpe = sd > 0 ? (mean / sd) * Math.sqrt(252) : 0;
+  let peak = -Infinity, maxDd = 0;
+  for (const v of eqs) { peak = Math.max(peak, v); maxDd = Math.max(maxDd, 1 - v / peak); }
+  const last = eqs[eqs.length - 1];
+  const firstPt = points.find(p => Number(p.equity) > 0);
+  const lastPt = points[points.length - 1];
+  return { sharpe, maxDd, curDd: last / peak - 1, last,
+    firstDate: firstPt ? firstPt.date : "—", lastDate: lastPt ? lastPt.date : "—" };
+}
+
 async function renderPaper() {
   const el = pageEl("paper");
   el.innerHTML = `<div class="loading">加载模拟账户…</div>`;
-  let st, cfg;
-  try { [st, cfg] = await Promise.all([api("/api/paper/status"), api("/api/config")]); }
+  let st, cfg, ov;
+  try { [st, cfg, ov] = await Promise.all([
+      api("/api/paper/status"), api("/api/config"),
+      api("/api/overview").catch(() => null),
+    ]); }
   catch (e) { el.innerHTML = `<div class="err-box">加载失败: ${esc(e.message)}</div>`; return; }
   const s = (cfg && cfg.settings) || {};
 
@@ -1524,7 +1851,44 @@ async function renderPaper() {
       st.real_account && st.real_account.available ? (st.real_account.total >= 0 ? "green" : "red") : ""),
   ];
 
+  // 指标卡: 组合类按模拟账户净值曲线计算, 模型类(IC/信号)与仓位无关复用总览同源数据
+  const pm = paperMetrics(st.equity_points || []);
+  // 累计倍数 = 当前净值/初始资金(账户口径); 曲线首点可能是 backfill 建仓后点,
+  // 用它当「起点 1 元」会低估/高估真实累计(如 backfill 首点 > 初始资金)。
+  const mult = (st.starting_balance > 0 && st.equity) ? st.equity / st.starting_balance : null;
+  const ovData = ov || {};
+  const mv = ovData.model_validity || {};
+  const sig = ovData.latest_signal || {};
+  const pmWin = pm ? `${pm.firstDate} → ${pm.lastDate}` : "";
+  const posPct = st.equity ? st.positions_value / st.equity : 0;
+  const mTiles = [
+    tile("账户净值(模拟)", mult != null ? fmt(mult, 2) : "—",
+      mult != null ? `${pm ? pm.lastDate : st.last_settle || "—"} · 起点 1 元 → 当前 ${fmt(mult, 2)} 元` : (st.initialized ? "净值历史不足(需至少 2 个结算点)" : "未初始化"),
+      mult != null ? (mult >= 1 ? "green" : "red") : "amber"),
+    tile("回撤(当前)", pm ? fmtPct(pm.curDd) : "—",
+      pm ? `${pm.lastDate} · 距历史最高点回落 · 当日仓位 ${fmtP(posPct, 0)}` : "",
+      pm ? (pm.curDd < -0.08 ? "red" : (pm.curDd < -0.03 ? "amber" : "green")) : ""),
+    tile("当前仓位(模拟)", fmtP(posPct, 0),
+      st.initialized ? `现金 $${fmtMoney(st.cash)} · ${st.n_positions} 个持仓 · 按信号调仓` : "未初始化", "amber"),
+    tile("模型 IC(60日)", fmt(mv.ic, 4),
+      `预测与未来60日收益的相关性,越接近1越准 · t=${fmt(mv.t_nw, 1)} · ${mv.date || "—"}`, mv.ok ? "green" : "red"),
+    tile("OOS IC(样本外)", fmt(mv.oos_ic, 4),
+      mv.oos_ok ? "样本外预测力 · 显著通过 ✅" : "样本外预测力未通过 ⚠", mv.oos_ok ? "green" : "red"),
+    tile("Sharpe(全期)", pm ? fmt(pm.sharpe, 2) : "—",
+      pm ? `收益风险比(越高越好) · ${esc(pmWin)} · 模拟净值口径` : "净值历史不足",
+      pm ? (pm.sharpe >= 1 ? "green" : "amber") : ""),
+    tile("最大回撤", pm ? fmtPct(pm.maxDd) : "—",
+      pm ? `历史最坏: 从最高点最多跌 ${fmtPct(Math.abs(pm.maxDd))} · ${esc(pmWin)}` : "",
+      pm ? (pm.maxDd < -0.08 ? "amber" : "green") : ""),
+    tile("累计收益(模拟)", mult != null ? fmtPct(mult - 1, 0) : "—",
+      mult != null ? `${esc(pmWin)} 区间总涨幅(已含滑点与手续费 · 初始资金 ${fmtMoney(st.starting_balance)} 起)` : "净值历史不足",
+      mult != null ? (mult >= 1 ? "green" : "red") : ""),
+    tile("最新信号", sig.date || "—",
+      sig.rows ? `${sig.rows} 只候选` : "尚未生成", sig.date ? "green" : "amber"),
+  ];
+
   let html = `<div class="grid tiles">${tiles.join("")}</div>
+  <div class="grid tiles">${mTiles.join("")}</div>
   <div class="card"><h3>账户操作(纸上交易 · 不连券商)</h3>
     <div class="form-grid inline">
       <label>初始资金 <input id="ppInit" type="number" value="${fmtMoney(s.paper_starting_balance ?? st.starting_balance)}" step="1000"></label>
@@ -1649,7 +2013,7 @@ async function paperReset() {
 
 /* 停止当前活跃任务(日志栏通用按钮) */
 async function stopActive() {
-  const tries = [["/api/train/stop", "训练"], ["/api/backtest/stop", "回测"], ["/api/backtest/panorama/stop", "全景OOS"], ["/api/validate/stop", "验证"], ["/api/signals/stop", "信号"], ["/api/evolve/stop", "自进化"], ["/api/pipeline/stop", "流水线复核"]];
+  const tries = [["/api/train/stop", "训练"], ["/api/backtest/stop", "回测"], ["/api/backtest/panorama/stop", "全景OOS"], ["/api/validate/stop", "验证"], ["/api/signals/stop", "信号"], ["/api/evolve/stop", "自进化"], ["/api/research/stop", "一键研究"], ["/api/pipeline/stop", "流水线复核"]];
   for (const [url, name] of tries) {
     try {
       const r = await api(url, { method: "POST" });
@@ -1894,9 +2258,9 @@ async function renderEvolve() {
       <tr><td>周检 IC</td><td>${fmt(mv.ic, 4)} / OOS ${fmt(mv.oos_ic, 4)} (${esc(mv.date || "—")})</td></tr>
       <tr><td>衰减告警</td><td>${(mv.slowdowns || []).length ? `${mv.slowdowns.length} 次减速事件` : "无"}</td></tr>
       <tr><td>死亡测试灯</td><td>${esc(JSON.stringify(death.lights || {}))}</td></tr>${(ov.panel_freshness && ov.panel_freshness.panels || []).map(pp => {
-        const frozen = pp.last && ov.panel_freshness.freeze_line && pp.last <= ov.panel_freshness.freeze_line;
         let tag;
-        if (frozen) tag = `冻结 ${esc(pp.last)}`;
+        if (pp.mode === "fixed") tag = `固定窗口(设计) ${esc(pp.last)}`;
+        else if (pp.mode === "frozen") tag = `冻结存档 ${esc(pp.last)}`;
         else if (pp.behind == null || pp.behind <= 0) tag = `✅ ${esc(pp.last)}`;
         else tag = `⚠ 落后 ${pp.behind} 交易日(${esc(pp.last)})`;
         return `<tr><td>面板 ${esc(pp.name)}</td><td>${tag}</td></tr>`;
