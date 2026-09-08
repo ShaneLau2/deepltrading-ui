@@ -6,7 +6,7 @@
   <title>deepltrading · 交易系统控制台</title>
   <!-- 相对路径: 本地由 /static 挂载、GitHub Pages 由仓库 static/ 目录提供, 两处通用。
        图表/导出库已 vendor 到本地(web/static/vendor), 不依赖 jsdelivr CDN(国内常不可达)。 -->
-  <link rel="stylesheet" href="static/style.css?v=34" />
+  <link rel="stylesheet" href="static/style.css?v=36" />
   <script src="static/vendor/chart.umd.min.js"></script>
   <script src="static/vendor/chartjs-adapter-date-fns.bundle.min.js"></script>
   <script src="static/vendor/chartjs-chart-financial.min.js"></script>
@@ -91,6 +91,15 @@
   </div>
 
   <script src="static/backend.js?v=6"></script>
-  <script src="static/app.js?v=68"></script>
+  <!-- 核心 + 页面模块: app.js 为共享工具, pages/*.js 按页拆分(经典脚本共享全局词法环境),
+       boot.js 必须最后加载(恢复上次页面 + 后端连接)。 -->
+  <script src="static/app.js?v=69"></script>
+  <script src="static/weekly_charts.js?v=2"></script>
+  <script src="static/pages/overview.js?v=1"></script>
+  <script src="static/pages/research.js?v=2"></script>
+  <script src="static/pages/signals.js?v=2"></script>
+  <script src="static/pages/paper.js?v=3"></script>
+  <script src="static/pages/logs.js?v=2"></script>
+  <script src="static/pages/boot.js?v=1"></script>
 </body>
 </html>

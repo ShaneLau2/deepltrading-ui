@@ -101,6 +101,7 @@ body {
 .card h3 .dim { font-weight: 400; }
 
 .grid { display: grid; gap: 16px; }
+.grid > * { min-width: 0; }  /* grid 子项防 min-width:auto 被内部宽内容(表格/canvas)撑破 */
 .grid.two { grid-template-columns: 1fr 1fr; }
 .grid.tiles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 18px; }
 @media (max-width: 860px) { .grid.two { grid-template-columns: 1fr; } }
@@ -109,6 +110,7 @@ body {
 .tile {
   background: var(--card); border: 1px solid var(--border); border-radius: 14px;
   padding: 14px 16px; backdrop-filter: blur(6px);
+  min-width: 0; /* grid auto-fit 项隐式 min-width:auto, 长副行/长数字会撑破列 → 允许收缩换行 */
 }
 .tile-label { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.6px; }
 .tile-value { font: 600 24px var(--mono); margin-top: 4px; }
@@ -129,7 +131,7 @@ body {
 .sig-tbl { table-layout: auto; }
 .tbl-note { margin: 6px 2px 0; font-size: 12px; }
 
-.table-scroll { overflow-x: auto; }
+.table-scroll { overflow-x: auto; min-width: 0; max-width: 100%; }
 .kv { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .kv td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
 .kv td:first-child { color: var(--dim); width: 42%; }
@@ -227,7 +229,7 @@ input[type="checkbox"] { accent-color: var(--blue); width: 15px; height: 15px; }
 }
 .toast.err { border-color: var(--red); }
 
-canvas { max-height: 320px; }
+canvas { max-height: 320px; max-width: 100%; /* 窄屏下 Chart.js canvas 固有宽度会撑破 grid 轨道(min-content) → 允许收缩 */ }
 
 /* ── 控制台增量 UI(批量/流水线/口径对照) ── */
 .tag.ok-tag { color: var(--green); border-color: rgba(74, 222, 128, 0.5); }
@@ -278,12 +280,12 @@ details.cmp[open] summary { margin-bottom: 10px; }
 .rs-step.active { border-color: #22d3ee; color: #22d3ee; background: rgba(34, 211, 238, 0.10); }
 .rs-step.done { border-color: rgba(74, 222, 128, 0.5); color: #4ade80; background: rgba(74, 222, 128, 0.08); }
 .rs-zones { display: grid; gap: 10px; }
-.rs-zone { border: 1px solid var(--border2); border-radius: 12px; background: rgba(148, 163, 184, 0.04); }
+.rs-zone { border: 1px solid var(--border2); border-radius: 12px; background: rgba(148, 163, 184, 0.04); min-width: 0; /* grid 子项隐式 min-width:auto 会被内部宽内容撑破 → 允许收缩 */ }
 .rs-zone > summary { cursor: pointer; padding: 12px 16px; display: flex; gap: 10px; align-items: baseline;
   font-size: 15px; color: var(--fg); user-select: none; }
 .rs-zone > summary .dim { font-size: 12.5px; margin-left: 6px; }
 .rs-zone[open] > summary { border-bottom: 1px solid var(--border2); }
-.rs-zone-body { padding: 14px 16px; }
+.rs-zone-body { padding: 14px 16px; overflow-x: auto; /* 内部大表格/表单在窄屏横向滚动, 不再撑破页面 */ }
 .sug { border: 1px solid var(--border2); border-left: 3px solid #60a5fa; border-radius: 10px;
   padding: 10px 14px; margin: 8px 0; background: rgba(148, 163, 184, 0.05); }
 .sug p { margin: 4px 0; color: var(--dim); font-size: 13.5px; line-height: 1.6; }
