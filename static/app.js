@@ -60,6 +60,14 @@ function chart(id, config) {
   const el = document.getElementById(id);
   if (!el) return;
   if (charts[id]) charts[id].destroy();
+  // 性能(2026-09-09): 12 图表 × 1000ms 默认动画 × 2.3 万数据点 → Chrome 渲染进程
+  // CPU ~100%、滚动卡顿。统一关动画 + 禁用 hover 交互的昂贵重绘, 保滚动流畅。
+  config.options = Object.assign({}, config.options, {
+    animation: false,
+    responsive: true,
+    maintainAspectRatio: config.options && config.options.maintainAspectRatio !== undefined ? config.options.maintainAspectRatio : false,
+    normalized: true,  // 数据去重序列化(大序列省内存)
+  });
   charts[id] = new Chart(el, config);
 }
 const CHART_STYLE = {

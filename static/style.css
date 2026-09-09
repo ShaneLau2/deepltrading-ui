@@ -30,7 +30,9 @@ body {
   position: absolute; width: 140vw; height: 140vw; left: -20vw; top: -60vw;
   background: radial-gradient(ellipse at 30% 30%, rgba(56, 120, 255, 0.16), transparent 55%),
               radial-gradient(ellipse at 75% 60%, rgba(140, 60, 220, 0.10), transparent 50%);
-  animation: drift 26s ease-in-out infinite alternate;
+  /* 性能(2026-09-09): 此层 140vw×140vw, 26s 逐帧 transform 动画 → Chrome 渲染进程 CPU ~100%。
+     改为静态, 保留视觉效果, 去掉逐帧重合成。 */
+  animation: none;
 }
 .bg-grid {
   position: absolute; inset: 0;
@@ -94,7 +96,9 @@ body {
 
 .card {
   background: var(--card); border: 1px solid var(--border); border-radius: 14px;
-  padding: 18px 20px; margin-bottom: 18px; backdrop-filter: blur(6px);
+  padding: 18px 20px; margin-bottom: 18px;
+  /* 性能(2026-09-09): backdrop-filter 在滚动时逐卡片重算背景模糊,
+     高 dpr 大窗口下是滚动卡顿主因 → 移除, 卡片自带半透明背景+边框, 视觉几乎不变。 */
 }
 .card h3 { font-size: 15.5px; margin-bottom: 12px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .card.warn { border-color: rgba(248, 113, 113, 0.45); background: rgba(127, 29, 29, 0.14); }
@@ -109,7 +113,7 @@ body {
 /* ── 指标砖 ── */
 .tile {
   background: var(--card); border: 1px solid var(--border); border-radius: 14px;
-  padding: 14px 16px; backdrop-filter: blur(6px);
+  padding: 14px 16px;
   min-width: 0; /* grid auto-fit 项隐式 min-width:auto, 长副行/长数字会撑破列 → 允许收缩换行 */
 }
 .tile-label { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.6px; }

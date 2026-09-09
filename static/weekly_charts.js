@@ -23,7 +23,8 @@ window.WCH = (function () {
     charts[c.id] = new Chart(el, {
       type: c.type || "line",
       data: c.data || { labels: [], datasets: [] },
-      options: c.options || {},
+      // 性能(2026-09-09): 关动画, 与 app.js chart() 同策略(周报图 3000+ 点 × 多图)
+      options: Object.assign({}, c.options || {}, { animation: false }),
     });
   }
 

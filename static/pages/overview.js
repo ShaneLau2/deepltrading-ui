@@ -346,6 +346,13 @@ async function renderOverview() {
             x: { grid: CHART_STYLE.grid, ticks: { color: "#8a94a8", maxTicksLimit: 10 } },
             y: { grid: CHART_STYLE.grid, ticks: CHART_STYLE.ticks } } } });
     }
+  } else {
+    // 未生成时的明确占位(避免空白卡片): nav json 由 mlp_variant_comparison.py 生成,
+    // 对比任务未重跑过(08-24 后), 曲线缺失是产物缺失不是渲染 bug。
+    const el = document.getElementById("ovVariants");
+    if (el) {
+      el.outerHTML = `<p class="dim warn" style="min-height:340px;margin:0;display:flex;align-items:center;justify-content:center">⚠ 13 变体净值未生成(缺 output/mlp_variant_nav.json)—— 需重跑 13 变体对比:<br>研究链控制台刷新阶段, 或 .venv/bin/python src/mlp_variant_comparison.py(数小时, 顺带刷新对比表与生产身份快照)。</p>`;
+    }
   }
   // 周报图表(共用模块): 与部署周报同一渲染模块/数据源, dark 主题由后端注入
   if (data.weekly_charts && data.weekly_charts.charts && data.weekly_charts.charts.length) {
