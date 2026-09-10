@@ -1128,6 +1128,93 @@ function renderRollingTable(vst) {
   box.innerHTML = html;
 }
 
+/* 盲测窗进度卡(2026-09-10): 双轨成熟度进度条 + 判色倒计时 + 判色后结果高亮。
+   数据全部来自 /api/evolve/overview 的 blind_window(src/blind_window_progress.py,
+   与周链判色推送同一事实源)。倒计时口径 = 裁决器真实规则(第 30 个盲测预测日的
+   标签成熟日), 不用文档惯例的「全熟 ≈2026-12 中旬」——口径差异在卡片里如实标注。 */
+function blindWindowCard(bw) {
+  const head = (extra) => `<h3>盲测窗进度(Frozen OOS)${extra || ""}</h3>`;
+  if (!bw || bw.available === false) {
+    return `<div class="card">${head()}<p class="dim">无盲测窗数据${
+      bw && bw.error ? ` · ${esc(bw.error)}` : "(signal_archive 尚无冻结点后预测)"}</p></div>`;
+  }
+  const eta = bw.eta || {};
+  const judged = !!bw.state_judged;
+  const pending = !!bw.pending_weekly_judge;
+  const up = String(bw.verdict || "").includes("建议升级");
+
+  const trackBar = (t) => {
+    const pct = Math.max(0, Math.min(1, t.pct || 0));
+    return `<div class="bw-track${t.is_gate ? " gate" : ""}">
+      <div class="bw-track-head">
+        <span class="bw-track-name">${esc(t.label)}${t.is_gate ? ' <span class="tag">判色门槛轨</span>' : ""}</span>
+        <span class="bw-track-num${t.ready ? " ready" : ""}">${fmt(t.mature_days, 0)}/${fmt(t.needed, 0)} 日</span>
+      </div>
+      <div class="bw-bar"><i class="${t.is_gate ? "gate" : "chal"}" style="width:${(pct * 100).toFixed(1)}%"></i></div>
+      <div class="bw-track-sub">预测 ${fmt(t.pred_days, 0)} 日 · ${esc(t.first_pred_day || "—")} → ${esc(t.last_pred_day || "—")}
+        · 本轨自身 ETA ≈${esc(t.eta || "—")}${t.ready ? "(已达标)" : `(${t.trading_days_left == null ? "—" : fmt(t.trading_days_left, 0)} 交易日)`}</div>
+    </div>`;
+  };
+
+  const statusTag = judged
+    ? '<span class="tag ok-tag">已判色</span>'
+    : (pending ? '<span class="tag warn-tag">达标待周链判色</span>' : '<span class="tag">等标签成熟</span>');
+
+  let html = `<div class="card bw-card">${head(statusTag)}
+    <p class="dim">冻结点 <b>${esc(bw.freeze_point)}</b> · 数据末日 <b>${esc(bw.as_of || "—")}</b>
+      · 判色门槛 = 盲测窗内 <b>标签成熟日 ≥ ${fmt(bw.needed, 0)} 天</b>
+      · 标签口径 fwd_ret_60(${fmt(bw.horizon_tdays, 0)} 交易日)</p>
+    <div class="bw-tracks">${(bw.tracks || []).map(trackBar).join("")}</div>`;
+
+  if (judged) {
+    /* 12 月自动判色后: 结果高亮(建议升级 = 绿 / 维持 = 蓝), 并摊开双轨对比表 */
+    html += `<div class="bw-verdict ${up ? "up" : "keep"}">
+      <div class="bw-verdict-tag">🔮 已判色 · ${esc(bw.state_updated_at || "")}</div>
+      <div class="bw-verdict-text">${esc(bw.verdict || "—")}</div>
+      <div class="bw-verdict-sub">IC 胜出 ${bw.ic_win ? "✅" : "❌"} · 裸 Sharpe 胜出 ${bw.sharpe_win ? "✅" : "❌"}
+        · ΔIC(cat−ens) ${bw.delta_ic == null ? "—" : (bw.delta_ic >= 0 ? "+" : "") + fmt(bw.delta_ic, 4)}
+        · <b>双指标同时胜出才建议升级; 换冠仍需 promotion_gates 全链 + 人工批准</b></div>
+    </div>`;
+    html += `<div class="table-scroll"><table class="grid-tbl"><thead><tr>
+      <th>双轨对比(共同成熟日)</th><th>ENS(生产)</th><th>CAT(挑战者·冻结)</th><th>胜出</th></tr></thead><tbody>${
+      (bw.comparison || []).map(r => {
+        const nd = r.kind === "int" ? 0 : (r.kind === "ic" ? 4 : 2);
+        const e = (r.ens == null) ? "—" : fmt(r.ens, nd);
+        const c = (r.cat == null) ? "—" : fmt(r.cat, nd);
+        let win = "—";
+        if (r.ens != null && r.cat != null && r.kind !== "int") {
+          win = Number(r.cat) > Number(r.ens) ? "CAT ✅" : (Number(r.cat) < Number(r.ens) ? "ENS ✅" : "持平");
+        }
+        return `<tr><td>${esc(r.label)}</td><td>${e}</td><td>${c}</td><td>${win}</td></tr>`;
+      }).join("")
+    }</tbody></table></div>
+    <p class="dim">判色结论已按「首次判色 + 结论变更」推送到手机(含本表 + decision-log 链接), 不重复刷屏。</p>`;
+  } else {
+    const left = eta.trading_days_left;
+    html += `<div class="bw-count">
+      <div class="bw-count-num">${left == null ? "—" : fmt(left, 0)}<i>个交易日</i></div>
+      <div class="bw-count-sub">
+        <div>判色倒计时 → ≈<b>${esc(eta.date || "—")}</b>(≈${eta.calendar_days_left == null ? "—" : fmt(eta.calendar_days_left, 0)} 自然日)</div>
+        <div class="dim">${pending
+          ? "已达判色门槛, 等周五周链 4a2a1b 输出判色(倒计时归零)"
+          : `第 ${fmt(bw.needed, 0)} 个盲测预测日的标签成熟日(该预测日 + ${fmt(bw.horizon_tdays, 0)} 交易日)`}</div>
+      </div>
+    </div>`;
+  }
+
+  const idt = bw.cat_identity || {};
+  html += `<p class="dim">实时状态 <b>${esc(bw.live_status || "—")}</b> · 裁决器存档 <b>${esc(bw.state_status || "—")}</b>(${esc(bw.state_updated_at || "—")})`
+    + (bw.state_lag ? ' <span class="tag warn-tag">存档滞后于实时数据, 等周五周链刷新</span>' : "")
+    + (bw.vintage_ok === false ? ' <span class="tag danger-tag">CAT vintage 混用</span>' : "")
+    + `</p>`;
+  if (idt.model_version) {
+    html += `<p class="dim">CAT 盲测身份: ${esc((idt.model_version || []).join(", "))}
+      · cfg ${esc((idt.config_hash || []).join(", "))} · 特征截止 ${esc((idt.feature_cutoff || []).join(", "))}</p>`;
+  }
+  html += `<p class="dim">⚠ ${esc(bw.doc_note || "")}</p></div>`;
+  return html;
+}
+
 /* ── 05 模型自进化 ────────────────────────────────────────────────── */
 async function renderEvolve() {
   pollDrop("ev");
@@ -1196,6 +1283,9 @@ async function renderEvolve() {
   let html = (tf.reference
     ? `<p class="dim">🔎 四灯数据新鲜度: 参考最新交易日 <b>${esc(tf.reference)}</b> · ${staleN ? `<b class="red">${staleN} 灯数据滞后</b>(末日见各灯, 落后 ≥2 交易日判滞后)` : "四灯数据均为最新"}</p>`
     : "") + `<div class="grid tiles">${tiles.join("")}</div>`;
+
+  // 盲测窗进度卡(Frozen OOS): 双轨成熟度进度条 + 判色倒计时 / 判色结果高亮
+  html += blindWindowCard(ov.blind_window);
 
   // 调度器
   const runBtns = ["daily", "midday", "weekly"].map(t => {
