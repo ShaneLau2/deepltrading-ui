@@ -5,6 +5,10 @@
 const SORT = { key: null, asc: true };
 const SIG_ROWS = {};  // symbol -> 最新信号行(供点击弹行情图)
 let BT_REPORT = null;  // 最近一次普通回测报告(供导出用)
+// 回测页同窗口的另两套口径: 生产冠军指标 + V2 打乱基线审计(由 /api/backtest/report
+// 平级返回)。分开存是因为它们不在 web_bt_report.json 里, 导出时也要能带上。
+let BT_PROD = null;
+let BT_OVERFIT = null;
 
 async function renderSignals() {
   pollDrop("sg");

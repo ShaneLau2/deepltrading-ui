@@ -616,6 +616,10 @@ async function loadBtReport() {
     const rep = r.report;
     if (rep.sweep) { BT_REPORT = null; renderSweep(rep); return; }
     BT_REPORT = rep;
+    // 生产冠军口径(与 champion_equity.csv 同源)与 V2 打乱基线审计, 由
+    // /api/backtest/report 平级返回, 不在 web_bt_report.json 里。
+    BT_PROD = r.prod || null;
+    BT_OVERFIT = r.overfit || null;
     const m = rep.metrics || {};
     const v2m = rep.metrics_v2 || {};
     const hasV2 = v2m.sharpe != null;
@@ -659,14 +663,30 @@ async function loadBtReport() {
         <button class="btn small" onclick="exportBtReport('png')">导出 PNG</button>
       </div>
       <p class="dim" style="margin:0">指标 + 年度分解 + 资金曲线(源 output/web_backtest_report.json)</p></div>`;
-    html += `<div class="card"><h3>风控前后对比<span class="tag">风控后 = × V2 生产暴露(DD阶梯×IC)</span></h3>
+    // 口径排序: 生产冠军放第一行 —— 这是唯一和真实跟踪净值对应的口径,
+    // 其余(裸引擎 / V2 as-if)都是研究对照, 不能当作业绩读数。
+    const rows = [];
+    if (BT_PROD) rows.push(cmpRow("生产冠军 · 实盘口径", "DD8% 减半 + VT18 上限 1.0 + 20bps 成本 · 与 champion_equity.csv 同源", BT_PROD, true));
+    rows.push(cmpRow("裸引擎 · 无风控", topNote, m, !BT_PROD));
+    rows.push(hasV2
+      ? cmpRow("V2 研究叠加 · 非生产", `as-if · 平均暴露 ${fmtP(rep.v2.mean_exposure, 0)} · 末日 ${fmtP(rep.v2.last_exposure, 0)}${rep.v2.ic_fallback ? " · ⚠ IC回退" : ""}`, v2m, false)
+      : `<tr><td colspan="7" class="dim">未勾选「叠加 V2 风控」→ 只显示引擎口径;勾选后重跑可出现叠加行</td></tr>`);
+    if (bm) rows.push(cmpRow(`benchmark:${esc(bmSym)} · 买入持有`, "0 成本 · 对照,不参与拟合判定", bm, false));
+    // 打乱基线: 随机化日收益后跑同一套 V2 规则, 若累计仍高于真实序列, 则
+    // 累计收益这项指标被「降仓 → 低波动 → 少复利拖累」的通用数学效应主导。
+    const audit = BT_OVERFIT;
+    let auditNote = "";
+    if (hasV2 && audit && audit.real && audit.shuffled && audit.shuffled.length) {
+      const lo = audit.shuffle_cum_min, hi = audit.shuffle_cum_max, rc = audit.real.cum;
+      auditNote = audit.cum_uninformative
+        ? `⚠ <b>V2 的累计收益不可作为业绩读数</b>:把日收益<b>随机打乱</b>后跑同一套 V2 规则,累计 ${fmtPct(lo, 0)} ~ ${fmtPct(hi, 0)},<b>高于</b>真实序列的 ${fmtPct(rc, 0)} —— 增量主要来自「降仓 → 低波动 → 少复利拖累」这个通用数学效应,不代表可兑现的择时收益。`
+        : `打乱日收益基线:累计 ${fmtPct(lo, 0)} ~ ${fmtPct(hi, 0)},真实序列 ${fmtPct(rc, 0)}(真实更高 → 累计这项未被随机效应主导)。`;
+    }
+    html += `<div class="card"><h3>口径对比<span class="tag">以「生产冠军」为准 · 其余为研究对照</span></h3>
       <div class="table-scroll"><table class="grid-tbl cmp-tbl"><thead><tr><th>口径</th>${cmpCols.map(([, h]) => `<th>${h}</th>`).join("")}</tr></thead><tbody>
-      ${cmpRow("风控前 · 引擎口径", topNote, m, true)}
-      ${hasV2 ? cmpRow("风控后 · ×V2 暴露", `平均暴露 ${fmtP(rep.v2.mean_exposure, 0)} · 末日 ${fmtP(rep.v2.last_exposure, 0)}${rep.v2.ic_fallback ? " · ⚠ IC回退" : ""}`, v2m, false)
-        : `<tr><td colspan="7" class="dim">未勾选「叠加 V2 风控」→ 只显示引擎口径;勾选后重跑可出现风控后行</td></tr>`}
-      ${bm ? cmpRow(`benchmark:${esc(bmSym)} · 买入持有`, "0 成本 · 对照,不参与拟合判定", bm, false) : ""}
+      ${rows.join("")}
       </tbody></table>
-      <p class="dim" style="margin:0">PF / 日胜率按交易日口径(与资金曲线同源);风控前 vs 风控后差异 = 生产 DD阶梯×IC 暴露的贡献;benchmark 为同窗口市场对照。⚠ 风控后累计/Sharpe 高于风控前,是暴露<b>择时降仓</b>(跌得越深降得越低、模型转强再恢复)躲掉 -51% 级深回撤保住复利所致,非放大收益(暴露 0.07–1.0 无杠杆);3406% 为模拟口径,假设暴露每日零摩擦精确缩放,真实调仓有滑点/手续费会低于此值。</p></div>`;
+      <p class="dim" style="margin:0">PF / 日胜率按交易日口径(与资金曲线同源);三套口径同窗口但<b>不可直接比大小</b>:裸引擎无风控(MDD ${fmtPct(m.mdd)}),V2 是 as-if 研究叠加层(非生产,平均暴露约 ${fmtP(rep.v2 && rep.v2.mean_exposure, 0)}),只有「生产冠军」对应真实跟踪净值。<br>${auditNote || `⚠ V2 累计 ${fmtPct(v2m.cum, 0)} 为模拟口径,假设暴露每日零摩擦精确缩放,真实调仓有滑点/手续费会低于此值。`}</p></div>`;
     html += `<div class="grid two">
       <div class="card"><h3>年度分解</h3>
         <table class="grid-tbl"><thead><tr><th>年</th><th>天数</th><th>Sharpe</th><th>累计</th><th>MDD</th></tr></thead><tbody>${
@@ -728,10 +748,17 @@ function btMetricsPairs(rep) {
   const m = rep.metrics || {};
   const v2m = rep.metrics_v2 || {};
   const prd = rep.period || {};
-  const a = [
-    ["Sharpe", fmt(m.sharpe, 2)], ["Sortino", fmt(m.sortino, 2)],
-    ["累计收益", fmtPct(m.cum, 0)], ["区间", `${prd.start || "—"} → ${prd.end || "—"} (${prd.n_days ?? "—"} 天)`],
-    ["最大回撤", fmtPct(m.mdd)], ["2022 段回撤", fmtPct(m.mdd_2022)],
+  const a = [];
+  if (BT_PROD) {
+    a.push(["【生产冠军】Sharpe", fmt(BT_PROD.sharpe, 2)],
+      ["【生产冠军】累计收益", fmtPct(BT_PROD.cum, 0)],
+      ["【生产冠军】最大回撤", fmtPct(BT_PROD.mdd)],
+      ["【生产冠军】口径", "DD8% 减半 + VT18 上限 1.0 + 20bps 成本 · champion_equity.csv 同源"]);
+  }
+  a.push(
+    ["【裸引擎·无风控】Sharpe", fmt(m.sharpe, 2)], ["【裸引擎】Sortino", fmt(m.sortino, 2)],
+    ["【裸引擎】累计收益", fmtPct(m.cum, 0)], ["区间", `${prd.start || "—"} → ${prd.end || "—"} (${prd.n_days ?? "—"} 天)`],
+    ["【裸引擎】最大回撤", fmtPct(m.mdd)], ["2022 段回撤", fmtPct(m.mdd_2022)],
     ["Calmar", fmt(m.calmar, 2)], ["恢复因子", fmt(m.recovery_factor, 2)],
     ["盈亏比 PF", fmt(m.profit_factor, 2)], ["组合胜率", fmtP(m.win_rate, 0)],
     ["交易数", esc(m.trade_n ?? "—")], ["交易胜率", fmtP(m.trade_win_rate, 0)],
@@ -739,12 +766,17 @@ function btMetricsPairs(rep) {
     ["平均持仓", isBad(m.avg_held) ? "—" : fmt(m.avg_held, 1) + " 只"],
     ["止损 / 止盈", `${esc(m.stops ?? "—")} / ${esc(m.tp_hits ?? "—")} 次`],
     ["重平衡", `${esc(m.rebal ?? "—")} 次`],
-  ];
+  );
   if (v2m.sharpe != null) {
-    a.push(["V2 风控后 Sharpe", fmt(v2m.sharpe, 2)]);
-    a.push(["V2 MDD", fmtPct(v2m.mdd)]);
-    a.push(["V2 累计", fmtPct(v2m.cum, 0)]);
-    a.push(["V2 平均暴露", isBad(rep.v2 && rep.v2.mean_exposure) ? "—" : fmtP(rep.v2.mean_exposure, 0)]);
+    a.push(["【V2 非生产】Sharpe", fmt(v2m.sharpe, 2)]);
+    a.push(["【V2 非生产】MDD", fmtPct(v2m.mdd)]);
+    a.push(["【V2 非生产】累计", fmtPct(v2m.cum, 0)]);
+    a.push(["【V2 非生产】平均暴露", isBad(rep.v2 && rep.v2.mean_exposure) ? "—" : fmtP(rep.v2.mean_exposure, 0)]);
+    if (BT_OVERFIT && BT_OVERFIT.real) {
+      a.push(["【V2 非生产】打乱基线累计",
+        `${fmtPct(BT_OVERFIT.shuffle_cum_min, 0)} ~ ${fmtPct(BT_OVERFIT.shuffle_cum_max, 0)}`
+        + ` (真实 ${fmtPct(BT_OVERFIT.real.cum, 0)}${BT_OVERFIT.cum_uninformative ? " · ⚠ 打乱更高, 累计不可当业绩" : ""})`]);
+    }
   }
   const bb = rep.benchmark || null;
   if (bb && bb.sharpe != null) {
@@ -782,8 +814,16 @@ function exportBtMarkdown(rep) {
   }
   const v2m = rep.metrics_v2 || {};
   if (v2m.sharpe != null && rep.v2) {
-    L.push("> V2 风控: DD 阶梯 × 60D IC(生产口径)。平均暴露 " + fmtP(rep.v2.mean_exposure, 0)
-      + (rep.v2.ic_fallback ? "(IC fallback)" : "") + "。", "");
+    L.push("> V2 风控: DD 阶梯 × 60D IC —— **as-if 研究叠加层, 非生产口径**。平均暴露 "
+      + fmtP(rep.v2.mean_exposure, 0) + (rep.v2.ic_fallback ? "(IC fallback)" : "") + "。");
+    if (BT_OVERFIT && BT_OVERFIT.real) {
+      L.push("> 打乱日收益基线: 同一套 V2 规则在随机化收益上累计 "
+        + fmtPct(BT_OVERFIT.shuffle_cum_min, 0) + " ~ " + fmtPct(BT_OVERFIT.shuffle_cum_max, 0)
+        + ",真实序列 " + fmtPct(BT_OVERFIT.real.cum, 0) + "。"
+        + (BT_OVERFIT.cum_uninformative
+          ? "**打乱基线更高 → V2 累计主要来自降仓降波动的通用数学效应, 不可作为业绩读数。**" : ""));
+    }
+    L.push("");
   }
   L.push("---", "");
   L.push("> 资金曲线见 PDF / PNG 导出或控制台回测页。引擎输出: output/web_backtest_report.json");
