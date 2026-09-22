@@ -178,7 +178,7 @@ async function renderTrain() {
       <button class="btn" onclick="runEvolve('daily','train')">盘后快报</button>
       <button class="btn" onclick="runEvolve('report','train')">周报</button>
     </div>
-    <p class="dim">盘中 = self_evolve --midday(轻量刷新+推送, 美东 11:30) · 盘后 = self_evolve --daily(收盘+30 分钟正式信号+推送) · 周报 = champion_report --push(冠军周报生成+推送)。自进化任务与信号任务互斥; 详细日志/进度在「模型自进化」分区。</p></div>
+    <p class="dim">盘中 = self_evolve --midday(轻量刷新+推送, 美东 11:00) · 盘后 = self_evolve --daily(收盘+30 分钟正式信号+推送) · 周报 = champion_report --push(冠军周报生成+推送)。自进化任务与信号任务互斥; 详细日志/进度在「模型自进化」分区。</p></div>
   <div class="grid two">
     <div class="card"><h3>数据集</h3>${ds.available
       ? `<table class="kv"><tbody>
