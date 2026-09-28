@@ -1140,12 +1140,7 @@ function paramHealthSection(vst) {
   }
   if (pv.available && pv.total != null) {
     const ok = pv.passed === pv.total;
-    // ⚠ 该产物不在任何链上(手动跑 src/production_validation.py), 且文件内无日期字段;
-    // 不显示生成时间的话, 一个 N 天前的 15/15 会被读成「今天检验全过」。
-    const pvAge = pv.age_days == null ? "未知" : `${pv.age_days} 天前`;
-    const pvAgeCls = pv.stale ? "amber" : "dim";
     html += `<div class="card"><h3>生产全项检验(production_validation.json · ${esc(pv.passed)}/${esc(pv.total)} 通过)</h3>
-      <p class="${pvAgeCls}">文件更新 ${esc(pv.mtime || "—")} · <span>${esc(pvAge)}</span>${pv.stale ? " · ⚠ 非链上产物, 不代表当前状态" : ""}</p>
       <table class="grid-tbl"><thead><tr><th>检查项</th><th>结果</th><th>说明</th></tr></thead><tbody>`;
     for (const [name, passed, note] of (pv.checks || [])) {
       html += `<tr><td>${esc(name)}</td><td class="${passed ? "green" : "red"}">${passed ? "✅" : "❌"}</td><td class="dim">${esc(note || "")}</td></tr>`;
