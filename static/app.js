@@ -92,7 +92,7 @@ function showPage(name) {
   try { localStorage.setItem("dl_web_page", name); } catch (_) {}
   document.querySelectorAll(".step").forEach(s => s.classList.toggle("active", s.dataset.page === name));
   document.querySelectorAll(".page").forEach(s => s.classList.toggle("active", s.dataset.page === name));
-  const renderers = { overview: renderOverview, research: renderResearch, signals: renderSignals, paper: renderPaper, logs: renderLogs, train: renderTrain, backtest: renderBacktest, evolve: renderEvolve, pipeline: renderPipeline };
+  const renderers = { overview: renderOverview, research: renderResearch, signals: renderSignals, paper: renderPaper, sleeves: renderSleeves, logs: renderLogs, train: renderTrain, backtest: renderBacktest, evolve: renderEvolve, pipeline: renderPipeline };
   renderers[name]();
 }
 

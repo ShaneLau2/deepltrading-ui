@@ -178,7 +178,7 @@ async function renderTrain() {
       <button class="btn" onclick="runEvolve('daily','train')">盘后快报</button>
       <button class="btn" onclick="runEvolve('report','train')">周报</button>
     </div>
-    <p class="dim">盘中 = self_evolve --midday(轻量刷新+推送, 美东 11:00) · 盘后 = self_evolve --daily(收盘+30 分钟正式信号+推送) · 周报 = champion_report --push(冠军周报生成+推送)。自进化任务与信号任务互斥; 详细日志/进度在「模型自进化」分区。</p></div>
+    <p class="dim">盘中 = self_evolve --midday(轻量刷新+推送, 美东 10:30) · 盘后 = self_evolve --daily(收盘+30 分钟正式信号+推送) · 周报 = champion_report --push(冠军周报生成+推送)。自进化任务与信号任务互斥; 详细日志/进度在「模型自进化」分区。</p></div>
   <div class="grid two">
     <div class="card"><h3>数据集</h3>${ds.available
       ? `<table class="kv"><tbody>
@@ -1140,7 +1140,12 @@ function paramHealthSection(vst) {
   }
   if (pv.available && pv.total != null) {
     const ok = pv.passed === pv.total;
-    html += `<div class="card"><h3>生产全项检验(production_validation.json · ${esc(pv.passed)}/${esc(pv.total)} 通过)</h3>
+    // ⚠ 卡片头必须给「什么时候生成的」+ 陈旧标记: 无日期的 N/N 会被当成今天的
+    //   检验(线上产物曾 23 天不刷新还显示全绿)。日期与天数任一即可, stale 必须显式标出。
+    const pvAge = pv.age_days != null ? `更新于 ${pv.age_days} 天前`
+                : (pv.mtime ? `更新于 ${pv.mtime}` : "");
+    const pvStale = pv.stale ? ` <span class="red">⚠ 已陈旧</span>` : "";
+    html += `<div class="card"><h3>生产全项检验(production_validation.json · ${esc(pv.passed)}/${esc(pv.total)} 通过${pvAge ? ` · ${esc(pvAge)}` : ""}${pvStale})</h3>
       <table class="grid-tbl"><thead><tr><th>检查项</th><th>结果</th><th>说明</th></tr></thead><tbody>`;
     for (const [name, passed, note] of (pv.checks || [])) {
       html += `<tr><td>${esc(name)}</td><td class="${passed ? "green" : "red"}">${passed ? "✅" : "❌"}</td><td class="dim">${esc(note || "")}</td></tr>`;
