@@ -1495,6 +1495,36 @@ async function renderEvolve() {
     html += `</div></div>`;
   }
 
+  // 三轴采纳状态(2026-10-06): 特征集/模型族/标签组本轮裁决 —— won=已写采纳候选
+  // (未切换, 还须过闸门) / no_winner=跑完维持(或未胜基准) / running=本轮进行中。
+  // 缺文件的轴·角色不列(「压根没跑」不许伪装成「跑完没人赢」)。
+  const axs = ov.arena_axis_status || {};
+  const axCn = { feature: "特征集轴", model: "模型族轴", label: "标签组轴" };
+  const axStTag = (s) => {
+    const cls = s === "won" ? "ok-tag" : s === "running" ? "warn-tag"
+      : s === "rejected" ? "danger-tag" : "";
+    return `<span class="tag ${cls}">${esc(s)}</span>`;
+  };
+  if (Object.keys(axs).length) {
+    const role4 = ["sel", "high", "low", "timing"];
+    const axRows = ["feature", "model", "label"].filter(ax => axs[ax]).map(ax => {
+      const mm = axs[ax];
+      const tds = role4.map(r => {
+        const s = mm[r];
+        if (!s) return `<td class="dim">—</td>`;
+        return `<td>${axStTag(esc(s.state))}${s.candidate ? ` <b>${esc(s.candidate)}</b>` : ""}` +
+          `<br><span class="dim">${esc(s.detail || "")}</span></td>`;
+      }).join("");
+      return `<tr><td><b>${axCn[ax]}</b></td>${tds}</tr>`;
+    }).join("");
+    html += `<div class="card"><h3>三轴采纳状态(特征/模型/标签)<span class="tag warn-tag">won = 已写采纳候选, 未切换生产</span></h3>
+      <div class="table-scroll"><table class="grid-tbl"><thead><tr><th>轴</th>${
+        role4.map(r => `<th>${roleCn[r] || r}</th>`).join("")
+      }</tr></thead><tbody>${axRows}</tbody></table></div>
+      <p class="dim">模型轴提名 = 双窗胜 prod_sym 的非现役族(§4.1 闸门 + 多种子复核 + 影子前向后才切换);标签轴冠军 = 现役标签组时记 no_winner(维持, 非否决)。sel 的模型族轴归 model_arena 选股竞技场, 不在本表。</p>
+    </div>`;
+  }
+
   // 健康监控 + 部署
   html += `<div class="grid two">`;
   let alerts = (diag.alerts || []).map(a => `<li>⚠ ${esc(a)}</li>`).join("");
