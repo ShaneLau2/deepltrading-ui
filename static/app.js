@@ -92,7 +92,7 @@ function showPage(name) {
   try { localStorage.setItem("dl_web_page", name); } catch (_) {}
   document.querySelectorAll(".step").forEach(s => s.classList.toggle("active", s.dataset.page === name));
   document.querySelectorAll(".page").forEach(s => s.classList.toggle("active", s.dataset.page === name));
-  const renderers = { overview: renderOverview, research: renderResearch, signals: renderSignals, paper: renderPaper, sleeves: renderSleeves, logs: renderLogs, train: renderTrain, backtest: renderBacktest, evolve: renderEvolve, pipeline: renderPipeline };
+  const renderers = { overview: renderOverview, research: renderResearch, lab: renderLab, signals: renderSignals, paper: renderPaper, sleeves: renderSleeves, logs: renderLogs, train: renderTrain, backtest: renderBacktest, evolve: renderEvolve, pipeline: renderPipeline };
   renderers[name]();
 }
 
@@ -108,6 +108,7 @@ async function pollHeader() {
       api("/api/backtest/panorama/status").then(r => r.status),
       api("/api/validate/status").then(r => ({ active: !!(r.fold6 && r.fold6.status && r.fold6.status.active) || !!(r.rolling && r.rolling.status && r.rolling.status.active) })),
       api("/api/pipeline/status").then(r => r.job),
+      api("/api/lab/status").then(r => r.status),
     ]);
     const any = sts.some(s => s && s.active);
     const pill = $("#jobPill");

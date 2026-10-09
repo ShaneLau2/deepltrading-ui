@@ -1,26 +1,29 @@
-/* 01 研究流水线 — 一键研究 + 训练/回测/自进化/特征流水线子区(研究页展开渲染)。 */
+/* 01 标准重训流水线(原研究流水线) — 一键链 + 训练/回测/自进化/SOP 子区(主页展开渲染)。 */
 "use strict";
 
-/* ── 01 研究流水线(一键研究 + 训练/回测/自进化/特征 子区) ────────── */
+/* ── 01 标准重训流水线(一键链 + 训练/回测/自进化/SOP 子区) ────────── */
 const RS_ZONES = [
   ["train", "模型训练", "多管线训练 · 批量对比"],
   ["backtest", "策略回测", "资金曲线 · 绩效评估(含全景 OOS / 滚动复核)"],
   ["evolve", "模型自进化", "调度 · 重训 · 竞技场"],
-  ["pipeline", "候选特征流水线", "挖掘 → 复核 → 竞技场"],
+  ["pipeline", "标准重训 17 步", "SOP 映射 · 缺口诊断"],
 ];
 const RS_STEPS_QUICK = [["check", "模型自检"], ["feature", "特征筛查"], ["evolve", "自我进化"], ["bt", "回测"], ["suggest", "新方向建议"]];
-const RS_STEPS_FULL = [["check", "模型自检"], ["rebuild", "数据集重建"], ["mine", "特征挖掘"], ["feature", "特征复核"], ["phase0", "标签冗余度"], ["arena", "竞技场"], ["retrain", "重训"], ["console", "控制台刷新"], ["fold6", "6折样本外"], ["rolling_review", "9起点复核"], ["bt", "回测"], ["suggest", "新方向建议"]];
+// ⚠ 必须与 research_worker.PHASES_FULL 同步(2026-10-09 补三缺口步: seam/validate/cat_shadow)
+const RS_STEPS_FULL = [["check", "模型自检"], ["rebuild", "数据集重建"], ["mine", "特征挖掘"], ["feature", "特征复核"], ["phase0", "标签冗余度"], ["arena", "竞技场"], ["seam", "特征集对拍"], ["retrain", "重训"], ["validate", "写盘复验"], ["cat_shadow", "cat 影子"], ["console", "控制台刷新"], ["fold6", "6折样本外"], ["rolling_review", "9起点复核"], ["bt", "回测"], ["suggest", "新方向建议"]];
 
 async function renderResearch() {
   pollDrop("rs");
   const el = pageEl("research");
-  el.innerHTML = `<div class="loading">加载研究流水线…</div>`;
+  el.innerHTML = `<div class="loading">加载标准重训流水线…</div>`;
   let st;
-  try { st = await api("/api/research/status"); } catch (_) { st = { job: {}, state: {} }; }
+  try { st = await api("/api/research/status"); } catch (_) { st = { status: {}, state: {} }; }
   el.innerHTML = researchShell(st);
   loadResearchReport();
   fillRsLog(st.state || {});
-  const active = !!(st.job && st.job.active);
+  // ⚠ 响应顶层是 status(JobManager.status(): {active, job, ...}), 不是 job ——
+  //   读 st.job 恒 undefined ⇒ 运行中不轮询不显 busy(2026-10-09 修正)。
+  const active = !!(st.status && st.status.active);
   if (active) {
     pollSet("rs", async () => {
       try {
@@ -30,7 +33,7 @@ async function renderResearch() {
         fillRsLog(r.state || {});
         const box = document.getElementById("rsReport");
         if (box) renderResearchReport(box, r.state || {});
-        if (!(r.job && r.job.active)) { renderResearch(); }
+        if (!(r.status && r.status.active)) { renderResearch(); }
       } catch (_) {}
     }, 2500);
   } else {
@@ -62,16 +65,16 @@ function rsStepsHtml(state) {
 }
 
 function researchShell(st) {
-  const job = (st && st.job) || {};
+  const job = (st && st.status) || {};
   const state = (st && st.state) || {};
   const mode = (state.mode === "full") ? "full" : "quick";
   const prevDone = (state.done || []).length;
   const prevInterrupted = state.phase_label && !!(state.phase_label || "").startsWith("中断") && prevDone > 0;
-  const stepsTag = mode === "full" ? "自检 → 挖掘 → 复核 → 竞技场 → 重训 → 控制台刷新 → 6折样本外 → 9起点复核 → 回测 → 新方向" : "自检 → 特征 → 进化 → 回测 → 新方向";
+  const stepsTag = mode === "full" ? "自检 → 挖掘 → 复核 → 竞技场 → 对拍 → 重训 → 复验 → 影子 → 回测 → 新方向" : "自检 → 特征 → 进化 → 回测 → 新方向";
   const hint = mode === "full"
-    ? "顺序: ①模型自检(健康/死亡/衰减/参数体检) ②特征挖掘(auto_feature_mining 交互候选) ③特征全量复核(9 起点 + 打乱对照 + AGENTS 登记) ④标签冗余度地图(Phase 0, 正交训练前置) ⑤竞技场(model_arena 选股 + 止盈/止损/时点三角色,双窗口对决) ⑥重训(选股 IC 退化才重训;角色读竞技场胜出候选,护栏通过才切换) ⑦控制台刷新(重训后重建 ic_report + 13 变体对比,供训练页/生产家族 IC 列) ⑧回测(Top30 · V2 · SPY 对照) ⑨聚合新方向建议。总耗时数小时,建议周末跑;日志实时滚动,各子环节完整详情在下方分区。"
+    ? "顺序: ①模型自检(健康/死亡/衰减/参数体检) ②特征挖掘(auto_feature_mining 交互候选) ③特征全量复核(9 起点 + 打乱对照 + AGENTS 登记) ④标签冗余度地图(Phase 0, 正交训练前置) ⑤三竞技场裁决(model_arena 主模型 + 四角色特征轴 + arena_model_family 模型轴, 双窗口) ⑥特征集对拍(runbook 第 4 步: 常量↔盘上 config 一致性, 只出声) ⑦重训(闸门/关卡放行才写盘; 角色读竞技场候选) ⑧写盘后复验(validate-only, 失败中断) ⑨cat 影子列(证据积累, 不改 score_60) ⑩控制台刷新 + 6折/9起点验证证据 ⑪回测(Top30 · V2 · SPY) ⑫聚合新方向建议。= docs/pipeline-runbook.md 17 步 SOP 的执行版(第 15/17 步为设计内跳过/人工, 见「标准重训 17 步」分区)。总耗时数小时,建议周末跑。"
     : "顺序: ①模型自检(健康/死亡/衰减/参数体检) ②特征筛查(待审候选 9 起点复核) ③自我进化(只读重训检查) ④回测(Top30 · V2 · SPY 对照) ⑤聚合新方向建议。总耗时约 3-10 分钟,日志实时滚动;重训/竞技场等训练类任务在下方分区手动跑,各子环节完整详情也在分区。";
-  return `<div class="card"><h3>一键研究流水线<span class="tag ${mode === "full" ? "danger-tag" : "warn-tag"}">${stepsTag}</span></h3>
+  return `<div class="card"><h3>一键标准重训流水线<span class="tag ${mode === "full" ? "danger-tag" : "warn-tag"}">${stepsTag}</span></h3>
     ${busySection(job)}
     <div class="rs-steps">${rsStepsHtml(state)}</div>
     ${logConsole("rsLog")}
@@ -87,7 +90,7 @@ function researchShell(st) {
     </div>
     <p class="dim">${hint}</p></div>
     <div id="rsReport"></div>
-    <div class="card"><h3>研究分区(内容与独立页一致,展开即用)</h3>
+    <div class="card"><h3>流水线分区(内容与独立页一致,展开即用)</h3>
       <div class="rs-zones">${RS_ZONES.map(([name, title, sub]) =>
         `<details class="rs-zone" data-zone="${name}" ontoggle="researchZoneToggle('${name}')">
           <summary><b>${title}</b><span class="dim">${sub}</span></summary>
@@ -1505,7 +1508,7 @@ async function renderEvolve() {
       : s === "rejected" ? "danger-tag" : "";
     return `<span class="tag ${cls}">${esc(s)}</span>`;
   };
-  if (Object.keys(axs).length) {
+  {   // 恒渲染(2026-10-08): 卡内有手动触发按钮, 无状态时也要能点(空态提示见下)
     const role4 = ["sel", "high", "low", "timing"];
     const axRows = ["feature", "model", "label"].filter(ax => axs[ax]).map(ax => {
       const mm = axs[ax];
@@ -1517,10 +1520,17 @@ async function renderEvolve() {
       }).join("");
       return `<tr><td><b>${axCn[ax]}</b></td>${tds}</tr>`;
     }).join("");
+    const axTable = Object.keys(axs).length
+      ? `<div class="table-scroll"><table class="grid-tbl"><thead><tr><th>轴</th>${
+          role4.map(r => `<th>${roleCn[r] || r}</th>`).join("")
+        }</tr></thead><tbody>${axRows}</tbody></table></div>`
+      : `<p class="dim">尚未产出任何轴状态(点下方按钮首跑, 或等周链 2c3/研究链自动跑)。</p>`;
     html += `<div class="card"><h3>三轴采纳状态(特征/模型/标签)<span class="tag warn-tag">won = 已写采纳候选, 未切换生产</span></h3>
-      <div class="table-scroll"><table class="grid-tbl"><thead><tr><th>轴</th>${
-        role4.map(r => `<th>${roleCn[r] || r}</th>`).join("")
-      }</tr></thead><tbody>${axRows}</tbody></table></div>
+      <div class="btn-row">
+        <button class="btn" onclick="runEvolve('arena_model_family')">模型族竞技场(手动 · 高/低/时点三角色)</button>
+      </div>
+      ${axTable}
+      <p class="dim">手动按钮 = 强制重跑三角色<b>模型轴</b>(与周链 2c3 同命令 arena_model_family --axis model, 顺序执行);运行中对应格为 running, 跑完落 won/no_winner 终态 —— 任务结束页面自动重渲染本卡。标签轴无按钮: 登记 data/arena_label_candidates_{role}.json 后由周链自动跑(登记流程见 docs/pipeline-runbook.md「标签轴候选注册表」)。</p>
       <p class="dim">模型轴提名 = 双窗胜 prod_sym 的非现役族(§4.1 闸门 + 多种子复核 + 影子前向后才切换);标签轴冠军 = 现役标签组时记 no_winner(维持, 非否决)。sel 的模型族轴归 model_arena 选股竞技场, 不在本表。</p>
     </div>`;
   }
@@ -1597,9 +1607,12 @@ async function runEvolve(task, reload) {
     arena: "模型竞技场(选股,数小时)", tri_cat_validity: "tri/cat 有效性检验",
     arena_high: "止盈角色竞技场", arena_low: "止损角色竞技场",
     arena_timing: "时点角色竞技场", label_orth: "标签冗余度地图",
+    arena_model_family: "模型族竞技场(高/低/时点,约 15-45 分钟)",
     research_refresh: "刷新研究面板链(数小时)", report: "周报推送", deploy: "部署日报站点" };
   if (task === "weekly" && !confirm("周末自进化链耗时长(重建数据集+竞技场等,可能数小时)。确认启动?")) return;
   if (task === "arena" && !confirm("模型竞技场(选股)需要训练多个模型,可能运行数小时。确认启动?")) return;
+  // 模型族竞技场必须在 arena_* 通用确认**之前**拦下(否则会套上角色竞技场文案)
+  if (task === "arena_model_family" && !confirm("模型族竞技场: high/low/timing 三角色顺序对决(各训 mlp/lgb/cat/ens/ens_cat 双窗口, 约 15-45 分钟)。结果写 adopted_{role}_model_status → 三轴采纳状态卡。确认启动?")) return;
   if (task.startsWith("arena_") && !confirm("角色竞技场需为该标签族训练双窗口模型(约 10-40 分钟)。确认启动?")) return;
   if (task === "label_orth" && !confirm("标签冗余度地图要训练 5 个 OOS 模型(约 10-30 分钟)。确认启动?")) return;
   if ((task === "retrain" || task === "retrain_force") && !confirm("重训验证通过后会用新模型替换生产 models/。确认继续?")) return;
@@ -1729,10 +1742,50 @@ function renderBatchBox(bts, mt) {
 }
 
 /* ── 06 候选特征流水线 ─────────────────────────────────────────────── */
+function runbookCardHtml(rb, rst) {
+  /* 标准重训 17 步 SOP 映射卡(runbook ↔ 链阶段)。
+     rb = research_worker.RUNBOOK_STEPS; rst = web_research_state.json(最近一轮)。
+     分类: ✅链内自动 / 👤人工 / ⏭设计内跳过 / 🗓周链自动。
+     本轮进度只对 chain=research 的 auto 行标: ✓=done · …=进行中。 */
+  if (!Array.isArray(rb) || !rb.length) return "";
+  const done = new Set((rst && rst.done) || []);
+  const cur = (rst && rst.phase) || "";
+  const isFull = (rst && rst.mode) === "full";
+  const seam = ((rst && rst.seam_check) || {}).rows || [];
+  const seamBad = seam.filter(r => r.ok === false).length;
+  const modeTag = { auto: ["✅ 链内自动", "ok-tag"], manual: ["👤 人工", "warn-tag"],
+                    skipped: ["⏭ 设计内跳过", ""] };
+  const rows = rb.map(s => {
+    const weekly = s.chain === "weekly";
+    const [mtext, mcls] = weekly ? ["🗓 周链自动", "ok-tag"] : (modeTag[s.mode] || ["—", ""]);
+    let prog = "—";
+    if (!weekly && s.mode === "auto" && s.stage) {
+      if (done.has(s.stage)) prog = "✓";
+      else if (isFull && cur === s.stage) prog = "…";
+    }
+    let note = s.note || "";
+    if (s.step === "4" && seam.length) {
+      note = `对拍 ${seam.filter(r => r.ok === true).length}/${seam.length} 一致`
+        + (seamBad ? ` · ⚠ ${seamBad} 角色不一致(拦截在 retrain B 兑底)` : "")
+        + (note ? ` · ${note}` : "");
+    }
+    return `<tr><td><b>${esc(s.step)}</b></td><td>${esc(s.title)}</td>` +
+      `<td class="dim">${esc(s.stage || "—")}</td>` +
+      `<td><span class="tag ${mcls}">${mtext}</span></td>` +
+      `<td>${prog}</td><td class="dim">${esc(note)}</td></tr>`;
+  }).join("");
+  return `<div class="card"><h3>标准重训 17 步 SOP 映射<span class="tag">docs/pipeline-runbook.md</span></h3>
+    <p class="dim">链 = 本页「一键标准重训流水线」全量版(16 步进链, 第 15 步跳过、第 17 步切换人工);
+      本轮进度取最近一次运行状态${isFull ? "(全量版)" : "(快速版, 无进度)"}。</p>
+    <div class="table-scroll"><table class="grid-tbl"><thead><tr>
+      <th>步</th><th>内容</th><th>链阶段</th><th>分类</th><th>本轮</th><th>备注</th>
+    </tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+
 async function renderPipeline() {
   pollDrop("pipe");
   const el = pageEl("pipeline");
-  el.innerHTML = `<div class="loading">加载候选特征流水线…</div>`;
+  el.innerHTML = `<div class="loading">加载标准重训流水线…</div>`;
   let st;
   try { st = await api("/api/pipeline/status"); }
   catch (e) { el.innerHTML = `<div class="err-box">加载失败: ${esc(e.message)}</div>`; return; }
@@ -1742,8 +1795,16 @@ async function renderPipeline() {
   const gap = st.gap || {};
   const active = st.job.active;
 
+  // ── 标准重训 17 步 SOP 映射(runbook ↔ 链阶段; 数据源 research_worker.RUNBOOK_STEPS,
+  //    经 /api/research/status 透出; 拿不到则降级不渲染, 不阻断缺口诊断) ──
+  let rbHtml = "";
+  try {
+    const rr = await api("/api/research/status");
+    rbHtml = runbookCardHtml(rr.runbook || [], rr.state || {});
+  } catch (_) { /* 老后端无 runbook 字段 → 跳过本卡 */ }
+
   const gRow = (label, n, warn) => `<tr><td>${label}</td><td><b class="${n > 0 && warn ? "neg" : ""}">${n}</b></td><td class="dim">${warn ? "⚠ 缺口:未自动进入下一阶段" : "已衔接"}</td></tr>`;
-  let html = `<div class="card"><h3>全链路缺口诊断(数据文件即事实来源)</h3>
+  let html = rbHtml + `<div class="card"><h3>全链路缺口诊断(数据文件即事实来源)</h3>
     <table class="grid-tbl"><thead><tr><th>环节</th><th>数量</th><th>状态</th></tr></thead><tbody>
       ${gRow("① 自动挖掘达标候选(auto_mined_candidates.json)", gap.n_mined, false)}
       ${gRow("② 未登记进复核表(feature_candidates.json)", gap.n_unregistered_gap, gap.n_unregistered_gap > 0)}

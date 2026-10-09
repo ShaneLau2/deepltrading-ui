@@ -117,14 +117,15 @@ function fmtWindow(w) {
 async function renderOverview() {
   const el = pageEl("overview");
   el.innerHTML = `<div class="loading">加载总览…</div>`;
-  let data, eq, ic, syms, g0;
+  let data, eq, ic, syms, g0, labRuns;
   const benchSym0 = (localStorage.getItem("ov_bench_sym") || "QQQ").toUpperCase();
-  try { [data, eq, ic, syms, g0] = await Promise.all([
+  try { [data, eq, ic, syms, g0, labRuns] = await Promise.all([
       api("/api/overview"),
       api(`/api/overview/equity?symbol=${encodeURIComponent(benchSym0)}`),
       api("/api/overview/ic"),
       api("/api/overview/symbols").then(s => s || [], () => []),
       api(`/api/overview/growth?symbol=${encodeURIComponent(benchSym0)}`).catch(() => null),
+      api("/api/lab/runs?limit=5").then(r => (r && r.runs) || [], () => []),
     ]); }
   catch (e) { el.innerHTML = `<div class="err-box">加载失败: ${esc(e.message)}</div>`; return; }
   const benchSym = (eq && eq.bench_symbol) || benchSym0;
@@ -289,6 +290,20 @@ async function renderOverview() {
       <div class="table-scroll"><table class="grid-tbl"><thead><tr><th>验证链</th><th>数据日期</th><th>判定</th><th>明细</th></tr></thead><tbody>${vcRows}</tbody></table></div>
       <p class="dim">全部读本地文件,零计算: 折6(fold6_*_result.json, IC 显著性 t≥2 判过) · 参数体检(param_health.json, 双窗口最优点是否漂移) · 9起点(rolling_review.csv, base 基准 9 起点 Sharpe 是否全正) · 竞技场(model_arena.csv, 生产模型是否在双窗口通过名单)。参数体检漂移 = 最优点随窗口移动的敏感性警示,不直接等于模型失效;各链详情见对应页面卡片。</p>
     </div>`;
+  }
+  // 实验评分卡(2026-10-08): 最近一条含 metrics 的 run —— 周链 lab_worker weekly
+  // 每周刷新, 手动跑实验流水线也会即时出现; 无数据/接口失败则静默不渲染(不拿空卡当现状)。
+  {
+    const lr = (labRuns || []).find(r => r.metrics && Object.keys(r.metrics).length);
+    if (lr) {
+      const staleNote = lr.score_stale
+        ? `<b class="warn">⚠ 已 ${esc(String(lr.score_age_days))} 天未刷新(阈值 ${lr.score_stale_days} 天) —— 周更可能失败或未跑, 手动跑一次「回测+评分」即可刷新。</b> `
+        : "";
+      html += `<div class="card"><h3>实验评分<span class="tag">${esc((lr.created_at || "").slice(0, 16))} · ${esc((lr.stages || []).join("→"))}</span>${labFreshTag(lr)}</h3>
+        <div class="lab-metrics">${labMetricTiles(lr.metrics)}</div>
+        <p class="dim">${staleNote}三源 collect(${esc(lr.note || "—")})。周链 lab_worker weekly 每周自动刷新, 跑实验流水线即时更新; 对比与历史见「02 实验流水线」页。</p>
+      </div>`;
+    }
   }
   el.innerHTML = html;
 

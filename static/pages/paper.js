@@ -203,7 +203,7 @@ async function paperReset() {
 
 /* 停止当前活跃任务(日志栏通用按钮) */
 async function stopActive() {
-  const tries = [["/api/train/stop", "训练"], ["/api/backtest/stop", "回测"], ["/api/backtest/panorama/stop", "全景OOS"], ["/api/validate/stop", "验证"], ["/api/signals/stop", "信号"], ["/api/evolve/stop", "自进化"], ["/api/research/stop", "一键研究"], ["/api/pipeline/stop", "流水线复核"]];
+  const tries = [["/api/train/stop", "训练"], ["/api/backtest/stop", "回测"], ["/api/backtest/panorama/stop", "全景OOS"], ["/api/validate/stop", "验证"], ["/api/signals/stop", "信号"], ["/api/evolve/stop", "自进化"], ["/api/research/stop", "一键研究"], ["/api/pipeline/stop", "流水线复核"], ["/api/lab/stop", "实验流水线"]];
   for (const [url, name] of tries) {
     try {
       const r = await api(url, { method: "POST" });
