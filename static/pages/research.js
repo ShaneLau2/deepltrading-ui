@@ -12,10 +12,42 @@ const RS_STEPS_QUICK = [["check", "模型自检"], ["feature", "特征筛查"], 
 // ⚠ 必须与 research_worker.PHASES_FULL 同步(2026-10-09 补三缺口步: seam/validate/cat_shadow)
 const RS_STEPS_FULL = [["check", "模型自检"], ["rebuild", "数据集重建"], ["mine", "特征挖掘"], ["feature", "特征复核"], ["phase0", "标签冗余度"], ["arena", "竞技场"], ["seam", "特征集对拍"], ["retrain", "重训"], ["validate", "写盘复验"], ["cat_shadow", "cat 影子"], ["console", "控制台刷新"], ["fold6", "6折样本外"], ["rolling_review", "9起点复核"], ["bt", "回测"], ["suggest", "新方向建议"]];
 
+/* ── 口径标签 helper(唯一事实源 = /api/backtest/report.caliber, 后端 web.util 下发) ──
+
+   ⚠ 本页历史上把生产口径写成「DD8% 减半 + VT18 上限 1.0 + 20bps」—— 那是 2026-08-27 切换
+   V2 **之前**的 legacy 口径(champion_config.py 的 v1 历史档案已标「仅供对照,非生产口径」)。
+   真实生产 = 生产袖袋基座 × V2(DD阶梯×IC 暴露) × 20bps, 见 risk_metrics.json:full。
+   另: V2 as-if 叠加行**不含衰减封顶**(champion._v2_equity 含), 两个口径末端指标差近 2 倍,
+   标签必须把这个数说出来, 否则读者会把 as-if 的 +467% 当生产业绩(生产 +260%)。
+   两处描述都从 BT_CAL 取, 读不到时降级成不含结构数字的通用说法, 不猜。 */
+function prodBaseLabel(cal) {
+  return (cal && cal.base_label) ? esc(cal.base_label) : "生产袖袋基座";
+}
+function prodCaliberSub(cal) {
+  const c = cal && cal.decay_cap;
+  const capTxt = (c && c.active && c.cap != null)
+    ? ` · 含衰减封顶(暴露 ≤ ${fmt(c.cap, 2)})` : "";
+  return `${prodBaseLabel(cal)} × V2(DD阶梯×IC 暴露)${capTxt} × 20bps 成本 · risk_metrics.json:full 与 champion_equity.csv 同源`;
+}
+function asIfV2Sub(cal, rep) {
+  const c = cal && cal.decay_cap;
+  const capTxt = (c && c.active && c.cap != null)
+    ? ` · <b class="warn">不含衰减封顶</b>(生产封顶到 ≤ ${fmt(c.cap, 2)})`
+    : " · 生产当前未封顶";
+  return `as-if 研究叠加${capTxt} · 平均暴露 ${fmtP(rep.v2.mean_exposure, 0)} · 末日 ${fmtP(rep.v2.last_exposure, 0)}${rep.v2.ic_fallback ? " · ⚠ IC回退" : ""}`;
+}
+/* 纯文本版(给导出的 kv 表用,不放 HTML 标签)。 */
+function asIfV2CaliberText(cal) {
+  const c = cal && cal.decay_cap;
+  return (c && c.active && c.cap != null)
+    ? `as-if 研究叠加,不含衰减封顶(生产封顶到 ≤ ${fmt(c.cap, 2)})`
+    : "as-if 研究叠加,生产当前未封顶";
+}
+
 async function renderResearch() {
   pollDrop("rs");
   const el = pageEl("research");
-  el.innerHTML = `<div class="loading">加载标准重训流水线…</div>`;
+  el.innerHTML = loadingBox("加载标准重训流水线…");
   let st;
   try { st = await api("/api/research/status"); } catch (_) { st = { status: {}, state: {} }; }
   el.innerHTML = researchShell(st);
@@ -72,8 +104,8 @@ function researchShell(st) {
   const prevInterrupted = state.phase_label && !!(state.phase_label || "").startsWith("中断") && prevDone > 0;
   const stepsTag = mode === "full" ? "自检 → 挖掘 → 复核 → 竞技场 → 对拍 → 重训 → 复验 → 影子 → 回测 → 新方向" : "自检 → 特征 → 进化 → 回测 → 新方向";
   const hint = mode === "full"
-    ? "顺序: ①模型自检(健康/死亡/衰减/参数体检) ②特征挖掘(auto_feature_mining 交互候选) ③特征全量复核(9 起点 + 打乱对照 + AGENTS 登记) ④标签冗余度地图(Phase 0, 正交训练前置) ⑤三竞技场裁决(model_arena 主模型 + 四角色特征轴 + arena_model_family 模型轴, 双窗口) ⑥特征集对拍(runbook 第 4 步: 常量↔盘上 config 一致性, 只出声) ⑦重训(闸门/关卡放行才写盘; 角色读竞技场候选) ⑧写盘后复验(validate-only, 失败中断) ⑨cat 影子列(证据积累, 不改 score_60) ⑩控制台刷新 + 6折/9起点验证证据 ⑪回测(Top30 · V2 · SPY) ⑫聚合新方向建议。= docs/pipeline-runbook.md 17 步 SOP 的执行版(第 15/17 步为设计内跳过/人工, 见「标准重训 17 步」分区)。总耗时数小时,建议周末跑。"
-    : "顺序: ①模型自检(健康/死亡/衰减/参数体检) ②特征筛查(待审候选 9 起点复核) ③自我进化(只读重训检查) ④回测(Top30 · V2 · SPY 对照) ⑤聚合新方向建议。总耗时约 3-10 分钟,日志实时滚动;重训/竞技场等训练类任务在下方分区手动跑,各子环节完整详情也在分区。";
+    ? "顺序: ①模型自检(健康/死亡/衰减/参数体检) ②特征挖掘(auto_feature_mining 交互候选) ③特征全量复核(9 起点 + 打乱对照 + AGENTS 登记) ④标签冗余度地图(Phase 0, 正交训练前置) ⑤三竞技场裁决(model_arena 主模型 + 四角色特征轴 + arena_model_family 模型轴, 双窗口) ⑥特征集对拍(runbook 第 4 步: 常量↔盘上 config 一致性, 只出声) ⑦重训(闸门/关卡放行才写盘; 角色读竞技场候选) ⑧写盘后复验(validate-only, 失败中断) ⑨cat 影子列(证据积累, 不改 score_60) ⑩控制台刷新 + 6折/9起点验证证据 ⑪回测(生产袖袋 3×K20 · V2 · SPY) ⑫聚合新方向建议。= docs/pipeline-runbook.md 17 步 SOP 的执行版(第 15/17 步为设计内跳过/人工, 见「标准重训 17 步」分区)。总耗时数小时,建议周末跑。"
+    : "顺序: ①模型自检(健康/死亡/衰减/参数体检) ②特征筛查(待审候选 9 起点复核) ③自我进化(只读重训检查) ④回测(生产袖袋 3×K20 · V2 · SPY 对照) ⑤聚合新方向建议。总耗时约 3-10 分钟,日志实时滚动;重训/竞技场等训练类任务在下方分区手动跑,各子环节完整详情也在分区。";
   return `<div class="card"><h3>一键标准重训流水线<span class="tag ${mode === "full" ? "danger-tag" : "warn-tag"}">${stepsTag}</span></h3>
     ${busySection(job)}
     <div class="rs-steps">${rsStepsHtml(state)}</div>
@@ -156,10 +188,10 @@ function renderResearchReport(box, st) {
 async function renderTrain() {
   pollDrop("train"); pollDrop("f6");
   const el = pageEl("train");
-  el.innerHTML = `<div class="loading">加载训练状态…</div>`;
+  el.innerHTML = loadingBox("加载训练状态…");
   let st, cfg, vst, bts, evs;
   try { [st, cfg, vst, bts, evs] = await Promise.all([api("/api/train/status"), api("/api/config"), api("/api/validate/status"), api("/api/train/batch/status"), api("/api/evolve/status").catch(() => ({}))]); }
-  catch (e) { el.innerHTML = `<div class="err-box">加载失败: ${esc(e.message)}</div>`; return; }
+  catch (e) { el.innerHTML = errBox(e.message); return; }
   const s = (cfg && cfg.settings) || {};
 
   const ds = st.dataset || {};
@@ -170,6 +202,7 @@ async function renderTrain() {
   const mt = (st.model_types || {});
   const ict = st.ic_table || {};
   const cmp = st.compare || {};
+  _refreshFeatLabels(st);
 
   // 快捷报告卡(2026-09-08): 盘中/盘后/周报一键生成, 展示自进化任务运行状态
   const evAct = (evs && evs.status && evs.status.active)
@@ -209,7 +242,7 @@ async function renderTrain() {
   html += `</tbody></table>
       ${(prod.ic_stale && prod.ic_stale.stale) ? `<p class="dim red">⚠ 家族 IC 列已过期: ic_report.csv(${esc(prod.ic_stale.mtime || "—")})早于 ${esc(prod.ic_stale.stale_src || "生产模型")}更新(${esc(prod.ic_stale.stale_since || "—")}) — 重训后需重跑 ic_report(全量链控制台刷新阶段会自动重建)。</p>` : ""}
       ${(prod.ic_eff && prod.ic_eff.available && prod.ic_eff.stale) ? `<p class="dim red">⚠ IC→PnL 效率状态已过期: 截至 ${esc(prod.ic_eff.as_of_week || "—")}(${esc(prod.ic_eff.generated_at || "—")}),早于 ${esc(prod.ic_eff.stale_src || "生产模型")}更新(${esc(prod.ic_eff.stale_since || "—")}) — 重训后未刷新,结论基于旧模型(全量链控制台刷新阶段会自动重跑)。</p>` : ""}
-      <p class="dim">IC = 60D 面板 rank-IC(源 output/ic_report.csv,研究/周检口径;时点家族显示 高/低 双值)。跨用途不可横向比较(标签不同:选股=fwd_ret_60,止盈=fwd_high_60,止损=fwd_low_60,时点=fwd_days_to_*);LGB 高低点未收录于 ic_report,其 IC 见训练日志。选股家族为集成信号 ens_60,子模型 IC 见下方「全模型 IC 一览」。</p>
+      <p class="dim">IC = 60D 面板 rank-IC(源 output/ic_report.csv,研究/周检口径;时点家族显示 高/低 双值)。跨用途不可横向比较(标签不同:选股=fwd_ret_60,止盈=fwd_high_60,止损=fwd_low_60,时点=fwd_days_to_*);LGB 高低点未收录于 ic_report,其 IC 见训练日志。选股家族为集成信号 ens_cat_60(MLP+CatBoost 逐日秩平均集成,生产口径),子模型 IC 见下方「全模型 IC 一览」。</p>
       ${prod.config ? `<p class="dim">主模型集成: ${esc(prod.config.ensemble || "—")} · LGBM: ${esc((prod.config.lgbm_models || []).join(", ") || "无")} · 文件: ${esc((prod.files || []).join(", "))}</p>` : ""}
       <ul class="note-list">${(st.frozen_notes || []).map(n => `<li>⚠ ${esc(n)}</li>`).join("")}</ul></div>
   </div>`;
@@ -220,11 +253,7 @@ async function renderTrain() {
     ${busySection(st.status)}
     <div class="form-grid">
       <label>模型类型 <select id="trModelType" onchange="onModelTypeChange()">${mtOpts || `<option value="main">主模型 MLP+LGBM</option>`}</select></label>
-      <label>特征集 <select id="trFeat">
-        <option value="swing">swing · 33特征(生产冠军)</option>
-        <option value="base">base · 26特征</option>
-        <option value="knife">knife · 32特征(接飞刀)</option>
-        <option value="ar">ar · 27特征</option></select></label>
+      <label>特征集 <select id="trFeat">${featOptions() || `<option value="swing">swing(生产冠军)</option><option value="base">base</option>`}</select></label>
       <label>Epochs <input id="trEpochs" type="number" value="40" min="1" max="200"></label>
       <label>训练窗口 <select id="trWindow">
         <option value="expanding">expanding · 全历史</option>
@@ -295,7 +324,7 @@ async function renderTrain() {
       <td><button class="btn small" onclick="deployExp('${esc(e.tag)}')">部署到生产</button></td></tr>`;
   }
   html += `</tbody></table>
-    <p class="dim">留出测试 = 训练窗口末尾 N 个月(训练不可见)的 ens_60 逐日秩相关 IC 与 Top30 标签均值年化 Sharpe(信号代理,非真实回测)。部署会先备份 models/ 到 models_backup_web_&lt;时间&gt;/,且需二次确认(违反冻结规则)。</p></div>`;
+    <p class="dim">留出测试 = 训练窗口末尾 N 个月(训练不可见)的实验自身 ens_h(=rank(MLP)+rank(LGB),旧集成口径,≠ 生产 ens_cat_60) 逐日秩相关 IC 与 Top30 标签均值年化 Sharpe(信号代理,非真实回测)。部署会先备份 models/ 到 models_backup_web_&lt;时间&gt;/,且需二次确认(违反冻结规则)。</p></div>`;
 
   // 6折样本外 + OOS 冻结卡片
   html += validateSection(vst);
@@ -328,8 +357,8 @@ function onModelTypeChange() {
   if (!sel) return;
   const t = sel.value;
   const HINTS = {
-    main: "主模型: MLP + LightGBM 逐日秩平均集成(生产同构),输出 config.json + model.pt + lgb_*.txt。",
-    mlp: "纯 MLP: 跳过 LightGBM,仅 MLP 排名模型,训练更快。",
+    main: "主模型: MLP + LightGBM + CatBoost 三模型重训管线(train_final / retrain),输出 config.json + model.pt + lgb_*.txt + cat_*.txt。⚠ 与生产**不完全同构**: 现役生产集成 = MLP+CatBoost(2026-10-10 起),LGB 分量已不参与排序。",
+    mlp: "纯 MLP: 跳过 LGB/CatBoost,仅 MLP 排名模型,训练更快。",
     high: "止盈模型: 预测 fwd_high_20/40/60(波段顶部目标价),输出 high_model.pt,信号页用作止盈参考。",
     low: "止损模型: 预测 fwd_low_20/40/60(下行风险),输出 low_model.pt,信号页用作止损参考。",
     lgb_hl: "LGB 高/低点: 训练 lgb_high/lgb_low,特征集仅支持 base/swing,输出 lgb_high_low_config.json。",
@@ -380,20 +409,24 @@ async function deployExp(tag) {
 async function renderBacktest() {
   pollDrop("bt"); pollDrop("rolling"); pollDrop("pano");
   const el = pageEl("backtest");
-  el.innerHTML = `<div class="loading">加载回测状态…</div>`;
+  el.innerHTML = loadingBox("加载回测状态…");
   let st, def, panoSt, panoRep, vst;
   try { [st, def, panoSt, panoRep, vst] = await Promise.all([api("/api/backtest/status"), api("/api/backtest/defaults"), api("/api/backtest/panorama/status"), api("/api/backtest/panorama/report"), api("/api/validate/status")]); }
-  catch (e) { el.innerHTML = `<div class="err-box">加载失败: ${esc(e.message)}</div>`; return; }
+  catch (e) { el.innerHTML = errBox(e.message); return; }
 
   const active = st.status.active;
   const panoActive = panoSt.status.active;
   const atrSel = ["", "1.5", "2.0", "3.0"].map(v =>
     `<option value="${v}" ${String(def.atr_mult) === String(v) ? "selected" : ""}>${v ? v + " × ATR" : "无个股止损(生产裸基座)"}</option>`).join("");
 
-  let html = `<div class="card"><h3>回测参数(引擎 = champion_stop.simulate · ens_60;成本固定 20bps/边)
+  let html = `<div class="card"><h3>回测参数(引擎 = champion_stop.simulate · ens_cat_60,生产集成口径,引擎动态解析;成本固定 20bps/边)
     <span class="tag warn-tag">非冻结实验参数</span></h3>
     ${busySection(st.status)}
     <div class="form-grid">
+      <label>组合口径 <select id="btPortfolio">
+        <option value="legacy" ${def.portfolio !== "production" ? "selected" : ""}>legacy · 单袋 TopK(03 页旧口径)</option>
+        <option value="production" ${def.portfolio === "production" ? "selected" : ""}>production · 3袖袋×K20(与生产/风控同轴)</option>
+      </select></label>
       <label>Top-K <input id="btK" type="number" value="${def.k}" min="5" max="200"></label>
       <label>ATR 止损倍数 <select id="btAtr">${atrSel}</select></label>
       <label>净值 DD 门控(如 0.08) <input id="btDd" placeholder="留空=无" value="${esc(def.dd_thresh)}"></label>
@@ -619,10 +652,11 @@ async function loadBtReport() {
     const rep = r.report;
     if (rep.sweep) { BT_REPORT = null; renderSweep(rep); return; }
     BT_REPORT = rep;
-    // 生产冠军口径(与 champion_equity.csv 同源)与 V2 打乱基线审计, 由
-    // /api/backtest/report 平级返回, 不在 web_bt_report.json 里。
+    // 生产冠军口径(与 champion_equity.csv 同源)、V2 打乱基线审计、口径事实源,
+    // 由 /api/backtest/report 平级返回, 不在 web_bt_report.json 里。
     BT_PROD = r.prod || null;
     BT_OVERFIT = r.overfit || null;
+    BT_CAL = r.caliber || {};
     const m = rep.metrics || {};
     const v2m = rep.metrics_v2 || {};
     const hasV2 = v2m.sharpe != null;
@@ -669,10 +703,10 @@ async function loadBtReport() {
     // 口径排序: 生产冠军放第一行 —— 这是唯一和真实跟踪净值对应的口径,
     // 其余(裸引擎 / V2 as-if)都是研究对照, 不能当作业绩读数。
     const rows = [];
-    if (BT_PROD) rows.push(cmpRow("生产冠军 · 实盘口径", "DD8% 减半 + VT18 上限 1.0 + 20bps 成本 · 与 champion_equity.csv 同源", BT_PROD, true));
+    if (BT_PROD) rows.push(cmpRow("生产冠军 · 实盘口径", prodCaliberSub(BT_CAL), BT_PROD, true));
     rows.push(cmpRow("裸引擎 · 无风控", topNote, m, !BT_PROD));
     rows.push(hasV2
-      ? cmpRow("V2 研究叠加 · 非生产", `as-if · 平均暴露 ${fmtP(rep.v2.mean_exposure, 0)} · 末日 ${fmtP(rep.v2.last_exposure, 0)}${rep.v2.ic_fallback ? " · ⚠ IC回退" : ""}`, v2m, false)
+      ? cmpRow("V2 as-if 叠加 · 研究对照", asIfV2Sub(BT_CAL, rep), v2m, false)
       : `<tr><td colspan="7" class="dim">未勾选「叠加 V2 风控」→ 只显示引擎口径;勾选后重跑可出现叠加行</td></tr>`);
     if (bm) rows.push(cmpRow(`benchmark:${esc(bmSym)} · 买入持有`, "0 成本 · 对照,不参与拟合判定", bm, false));
     // 打乱基线: 随机化日收益后跑同一套 V2 规则, 若累计仍高于真实序列, 则
@@ -689,7 +723,7 @@ async function loadBtReport() {
       <div class="table-scroll"><table class="grid-tbl cmp-tbl"><thead><tr><th>口径</th>${cmpCols.map(([, h]) => `<th>${h}</th>`).join("")}</tr></thead><tbody>
       ${rows.join("")}
       </tbody></table>
-      <p class="dim" style="margin:0">PF / 日胜率按交易日口径(与资金曲线同源);三套口径同窗口但<b>不可直接比大小</b>:裸引擎无风控(MDD ${fmtPct(m.mdd)}),V2 是 as-if 研究叠加层(非生产,平均暴露约 ${fmtP(rep.v2 && rep.v2.mean_exposure, 0)}),只有「生产冠军」对应真实跟踪净值。<br>${auditNote || `⚠ V2 累计 ${fmtPct(v2m.cum, 0)} 为模拟口径,假设暴露每日零摩擦精确缩放,真实调仓有滑点/手续费会低于此值。`}</p></div>`;
+      <p class="dim" style="margin:0">PF / 日胜率按交易日口径(与资金曲线同源);三套口径同窗口但<b>不可直接比大小</b>:裸引擎无风控(MDD ${fmtPct(m.mdd)});<b>V2 as-if 叠加是研究对照,不是生产</b> —— 生产口径是「${prodBaseLabel(BT_CAL)} → V2(DD阶梯×IC) → 暴露封顶 ≤ ${((BT_CAL && BT_CAL.decay_cap && BT_CAL.decay_cap.active && BT_CAL.decay_cap.cap != null) ? fmt(BT_CAL.decay_cap.cap, 2) : "—")} → 20bps 成本」,本行是「裸引擎 × 同一套 V2 规则、<b class="warn">不含衰减封顶</b>」,平均暴露 ${fmtP(rep.v2 && rep.v2.mean_exposure, 0)}${(BT_CAL && BT_CAL.decay_cap && BT_CAL.decay_cap.active) ? "(高于生产: 生产在 V2 之上再封顶, as-if 只跑到 V2)" : ""},不能直接拿去比生产冠军;只有「生产冠军」对应真实跟踪净值。<br>${auditNote || `⚠ V2 累计 ${fmtPct(v2m.cum, 0)} 为模拟口径,假设暴露每日零摩擦精确缩放,真实调仓有滑点/手续费会低于此值。`}</p></div>`;
     html += `<div class="grid two">
       <div class="card"><h3>年度分解</h3>
         <table class="grid-tbl"><thead><tr><th>年</th><th>天数</th><th>Sharpe</th><th>累计</th><th>MDD</th></tr></thead><tbody>${
@@ -756,7 +790,7 @@ function btMetricsPairs(rep) {
     a.push(["【生产冠军】Sharpe", fmt(BT_PROD.sharpe, 2)],
       ["【生产冠军】累计收益", fmtPct(BT_PROD.cum, 0)],
       ["【生产冠军】最大回撤", fmtPct(BT_PROD.mdd)],
-      ["【生产冠军】口径", "DD8% 减半 + VT18 上限 1.0 + 20bps 成本 · champion_equity.csv 同源"]);
+      ["【生产冠军】口径", prodCaliberSub(BT_CAL)]);
   }
   a.push(
     ["【裸引擎·无风控】Sharpe", fmt(m.sharpe, 2)], ["【裸引擎】Sortino", fmt(m.sortino, 2)],
@@ -771,12 +805,13 @@ function btMetricsPairs(rep) {
     ["重平衡", `${esc(m.rebal ?? "—")} 次`],
   );
   if (v2m.sharpe != null) {
-    a.push(["【V2 非生产】Sharpe", fmt(v2m.sharpe, 2)]);
-    a.push(["【V2 非生产】MDD", fmtPct(v2m.mdd)]);
-    a.push(["【V2 非生产】累计", fmtPct(v2m.cum, 0)]);
-    a.push(["【V2 非生产】平均暴露", isBad(rep.v2 && rep.v2.mean_exposure) ? "—" : fmtP(rep.v2.mean_exposure, 0)]);
+    a.push(["【V2 as-if】口径", asIfV2CaliberText(BT_CAL)]);
+    a.push(["【V2 as-if】Sharpe", fmt(v2m.sharpe, 2)]);
+    a.push(["【V2 as-if】MDD", fmtPct(v2m.mdd)]);
+    a.push(["【V2 as-if】累计", fmtPct(v2m.cum, 0)]);
+    a.push(["【V2 as-if】平均暴露", isBad(rep.v2 && rep.v2.mean_exposure) ? "—" : fmtP(rep.v2.mean_exposure, 0)]);
     if (BT_OVERFIT && BT_OVERFIT.real) {
-      a.push(["【V2 非生产】打乱基线累计",
+      a.push(["【V2 as-if】打乱基线累计",
         `${fmtPct(BT_OVERFIT.shuffle_cum_min, 0)} ~ ${fmtPct(BT_OVERFIT.shuffle_cum_max, 0)}`
         + ` (真实 ${fmtPct(BT_OVERFIT.real.cum, 0)}${BT_OVERFIT.cum_uninformative ? " · ⚠ 打乱更高, 累计不可当业绩" : ""})`]);
     }
@@ -817,8 +852,9 @@ function exportBtMarkdown(rep) {
   }
   const v2m = rep.metrics_v2 || {};
   if (v2m.sharpe != null && rep.v2) {
-    L.push("> V2 风控: DD 阶梯 × 60D IC —— **as-if 研究叠加层, 非生产口径**。平均暴露 "
-      + fmtP(rep.v2.mean_exposure, 0) + (rep.v2.ic_fallback ? "(IC fallback)" : "") + "。");
+    L.push(`> V2 风控: DD 阶梯 × 60D IC —— **${asIfV2CaliberText(BT_CAL)}**, 不是生产口径。`
+      + `平均暴露 ${fmtP(rep.v2.mean_exposure, 0)}`
+      + (rep.v2.ic_fallback ? "(IC fallback)" : "") + "。");
     if (BT_OVERFIT && BT_OVERFIT.real) {
       L.push("> 打乱日收益基线: 同一套 V2 规则在随机化收益上累计 "
         + fmtPct(BT_OVERFIT.shuffle_cum_min, 0) + " ~ " + fmtPct(BT_OVERFIT.shuffle_cum_max, 0)
@@ -997,6 +1033,7 @@ async function startBacktest() {
       dd_thresh: $("#btDd").value || null,
       vt_target: $("#btVt").value || null,
       rank_exit: $("#btRank").value || null,
+      portfolio: (($("#btPortfolio") && $("#btPortfolio").value) || "legacy"),
       v2: $("#btV2").checked,
       v2_recover: ($("#btV2Recover") ? $("#btV2Recover").value : "prod") || "prod",
       since: $("#btSince").value || "",
@@ -1033,9 +1070,7 @@ function validateSection(vst) {
         <p class="dim">${esc(oos.note || "")}</p>
       </div>
       <div class="form-grid inline">
-        <label>特征集 <select id="f6Feat">
-          <option value="swing">swing · 33特征(生产)</option>
-          <option value="base">base · 26特征</option></select></label>
+        <label>特征集 <select id="f6Feat">${featOptions(["swing","base"]) || `<option value="swing">swing</option><option value="base">base</option>`}</select></label>
         <label class="chk"><input id="f6Extend" type="checkbox"> 延伸至面板末日(--extend)</label>
       </div>
     </div>
@@ -1145,10 +1180,20 @@ function paramHealthSection(vst) {
     const ok = pv.passed === pv.total;
     // ⚠ 卡片头必须给「什么时候生成的」+ 陈旧标记: 无日期的 N/N 会被当成今天的
     //   检验(线上产物曾 23 天不刷新还显示全绿)。日期与天数任一即可, stale 必须显式标出。
+    //   2026-10-18: 另给判新依据 basis —— content=文件自带生成日期(mtime 是否被刷无所谓),
+    //   mtime/unknown=文件没有生成日期, 日期不可信, 必须黄字说清(Phase 6 批量刷过 mtime)。
     const pvAge = pv.age_days != null ? `更新于 ${pv.age_days} 天前`
                 : (pv.mtime ? `更新于 ${pv.mtime}` : "");
-    const pvStale = pv.stale ? ` <span class="red">⚠ 已陈旧</span>` : "";
+    const pvTrust = pv.basis === "content"
+      ? (pv.as_of ? `生成日期 ${esc(pv.as_of)}` : "")
+      : `<span class="warn">⚠ 日期不可信(${pv.mtime ? `仅 mtime ${esc(pv.mtime)}` : "文件缺失"})</span>`;
+    const pvStale = pv.stale
+      ? ` <span class="warn">⚠ 已陈旧(≥ ${esc(pv.stale_days != null ? pv.stale_days : 14)} 天)</span>` : "";
+    const pvWashed = pv.mtime_washed
+      ? ` <span class="warn">⚠ mtime 比内容新(疑被批量改写)</span>` : "";
     html += `<div class="card"><h3>生产全项检验(production_validation.json · ${esc(pv.passed)}/${esc(pv.total)} 通过${pvAge ? ` · ${esc(pvAge)}` : ""}${pvStale})</h3>
+      <p class="dim">${pvTrust}${pvWashed} · 判新依据 basis=${esc(pv.basis || "unknown")}<br>
+        ${esc(pv.freshness_note || pv.note || "")}</p>
       <table class="grid-tbl"><thead><tr><th>检查项</th><th>结果</th><th>说明</th></tr></thead><tbody>`;
     for (const [name, passed, note] of (pv.checks || [])) {
       html += `<tr><td>${esc(name)}</td><td class="${passed ? "green" : "red"}">${passed ? "✅" : "❌"}</td><td class="dim">${esc(note || "")}</td></tr>`;
@@ -1177,7 +1222,7 @@ function renderRollingTable(vst) {
 }
 
 /* 盲测窗进度卡(2026-09-10): 双轨成熟度进度条 + 判色倒计时 + 判色后结果高亮。
-   数据全部来自 /api/evolve/overview 的 blind_window(src/blind_window_progress.py,
+   数据全部来自 /api/evolve/overview 的 blind_window(research_pkg/blind_window_progress.py,
    与周链判色推送同一事实源)。倒计时口径 = 裁决器真实规则(第 30 个盲测预测日的
    标签成熟日), 不用文档惯例的「全熟 ≈2026-12 中旬」——口径差异在卡片里如实标注。 */
 function blindWindowCard(bw) {
@@ -1267,10 +1312,10 @@ function blindWindowCard(bw) {
 async function renderEvolve() {
   pollDrop("ev");
   const el = pageEl("evolve");
-  el.innerHTML = `<div class="loading">加载自进化状态…</div>`;
+  el.innerHTML = loadingBox("加载自进化状态…");
   let ov, st;
   try { [ov, st] = await Promise.all([api("/api/evolve/overview"), api("/api/evolve/status")]); }
-  catch (e) { el.innerHTML = `<div class="err-box">加载失败: ${esc(e.message)}</div>`; return; }
+  catch (e) { el.innerHTML = errBox(e.message); return; }
 
   const active = st.status.active;
   const decay = ov.decay || {};
@@ -1287,18 +1332,35 @@ async function renderEvolve() {
   const tf = ov.tile_freshness || {};
 
   const healthCls = (h) => h === "healthy" ? "green" : (h === "adverse" ? "red" : "amber");
+  // 日期可信度(warning 统一口径, 见 web/staleness.py):
+  //   basis === "content" = 产物自带内容日期, 可以当真;
+  //   basis !== "content"(mtime/unknown) = 只有 mtime, **日期不可信** → 必须黄字标出。
+  //   背景: Phase 6 迁移批量改路径把 ~46 个产物的 mtime 刷成「今天」, 只按 mtime 判新
+  //   会把 2026-08-23 的结论显示成「0 天前更新」。
+  const asOfTag = (d) => {
+    if (!d || !d.basis) return "";
+    if (d.basis === "content") {
+      return d.as_of ? `内容日期 ${esc(d.as_of)}${d.age_days != null ? `(${esc(d.age_days)} 天前)` : ""}` : "";
+    }
+    const mt = d.mtime ? `仅 mtime ${esc(d.mtime)}` : "文件缺失";
+    return `<span class="warn">⚠ 日期不可信(${mt})</span>`;
+  };
   // 四灯数据新鲜度守卫: 每灯标注自身输入末日; 落后 ≥2 交易日 → 显示「数据滞后」
   // 而非真实判定(原判定保留在副行)。tf.tiles = [{key,cn,source,end,lag,stale}]。
   const tfm = (key) => ((tf.tiles || []).find(t => t.key === key) || {});
   const guarded = (key, label, value, sub, cls) => {
     const t = tfm(key);
     const endTag = t.end ? `末日 ${esc(t.end)}` : "";
+    // 灯色用内容末日(end); 但状态文件读不到日期时要显式说「日期不可信」
+    const trust = t.date_trustworthy === false
+      ? `<span class="warn">⚠ 状态文件日期不可信(仅 mtime${t.mtime_washed ? " · 已被批量改写" : ""})</span>` : "";
     if (t.stale) {
       return tile(label, "⚠ 数据滞后",
-        `${endTag} · 落后 ${t.lag} 交易日 · 原判定: ${value}${sub ? `(${sub})` : ""}`,
+        `${endTag} · 落后 ${t.lag} 交易日 · 原判定: ${value}${sub ? `(${sub})` : ""}`
+          + (trust ? ` · ${trust}` : ""),
         "red");
     }
-    return tile(label, value, [sub, endTag].filter(Boolean).join(" · "), cls);
+    return tile(label, value, [sub, endTag, trust].filter(Boolean).join(" · "), cls);
   };
   const tiles = [
     guarded("decay", "滚动 60D IC", fmt(decay.roll_ic, 4), `长期均值 ${fmt(decay.long_mean, 4)}`, decay.roll_ic > 0.05 ? "green" : "amber"),
@@ -1316,11 +1378,17 @@ async function renderEvolve() {
       ch.streak_ok ? "green" : "amber"),
     tile("回滚快照", ov.rollback ? `${esc(ov.rollback.snapshotted_at || "—")}` : "无", ov.rollback ? `${esc(ov.rollback.n_files)} 个文件` : "", ""),
     tile("参数体检(双窗口)", phes.n_groups ? `${phes.n_groups - phes.n_drift}/${phes.n_groups} 组稳定` : "—",
-      phes.n_drift ? `⚠ 漂移: ${esc((phes.drift || []).join("、"))}` : (phes.n_groups ? "无漂移" : "缺 param_health.json"),
-      phes.n_drift ? "amber" : "green"),
+      [phes.n_drift ? `⚠ 漂移: ${esc((phes.drift || []).join("、"))}` : (phes.n_groups ? "无漂移" : "缺 param_health.json"),
+       asOfTag(phes)].filter(Boolean).join(" · "),
+      phes.n_drift ? "amber" : (phes.basis && phes.basis !== "content" ? "amber" : "green")),
+    // 生成日期 + 判新依据(basis): basis != content 或过期(≥ stale_days) 必须黄/红字
     tile("生产全项检验", pvs.total ? `${pvs.passed}/${pvs.total} 通过` : "—",
-      pvs.ok ? "✅ 全部通过(15 项计分卡)" : `❌ 失败: ${esc((pvs.failed || []).join("、")) || "未通过"}`,
-      pvs.ok ? "green" : "red"),
+      [pvs.ok ? "✅ 全部通过(15 项计分卡)" : `❌ 失败: ${esc((pvs.failed || []).join("、")) || "未通过"}`,
+       pvs.as_of ? `生成 ${esc(pvs.as_of)}` : "生成日期 unknown",
+       asOfTag(pvs),
+       pvs.mtime_washed ? `<span class="warn">⚠ mtime 比内容新(疑被批量改写)</span>` : ""].filter(Boolean).join(" · "),
+      (pvs.age_days != null && pvs.age_days >= (pvs.stale_days || 14)) || pvs.ok === false ? "red"
+        : (pvs.basis !== "content" ? "amber" : "green")),
     guarded("style", "选股风格橙灯", qrm.orange ? "🔴 亮起" : "正常",
       qrm.orange ? `动量偏差 ${fmtP(qrm.mom_bias_pp_4w / 100, 1)} · 行业排名 ${fmt(qrm.ind_rank_4w, 2)}` : `as_of ${esc(qrm.as_of || "—")}`, qrm.orange ? "red" : "green"),
     guarded("quality", "选股质量 PF", fmt(tq.pf, 2),
@@ -1359,7 +1427,7 @@ async function renderEvolve() {
       <button class="btn" onclick="runEvolve('retrain')">标准重训(按 IC 状态)</button>
       <button class="btn danger" onclick="runEvolve('retrain_force')">强制重训</button>
     </div>
-    <p class="dim">流程: 检查 IC → 退化或强制时训练 MLP+LGB → OOS 验证 → 通过才替换 models/ → shadow_live 确认。冻结规则(FROZEN_CHAMPION_V1)默认 2027-01-01 前不重训,标准重训只在自进化链判定退化时执行。</p>
+    <p class="dim">流程: 检查 IC → 退化或强制时重训 MLP+LGB+CatBoost → OOS 验证 → 通过才替换 models/ → shadow_live 确认(生产集成 = MLP+CatBoost 秩平均)。冻结规则(FROZEN_CHAMPION_V1)默认 2027-01-01 前不重训,标准重训只在自进化链判定退化时执行。</p>
   </div>`;
 
   // 竞技场
@@ -1389,7 +1457,7 @@ async function renderEvolve() {
   </div>`;
   html += `</div>`;
 
-  // tri/cat 双窗口有效性(tri_model_validity.py) — 与 ens_60 逐项对照
+  // tri/cat 双窗口有效性(tri_model_validity.py) — 与 ens_60(旧口径,非生产 ens_cat_60)逐项对照
   const tcv = ov.tri_cat_validity || {};
   const tcvRows = (key) => {
     const blk = tcv[key];
@@ -1434,9 +1502,10 @@ async function renderEvolve() {
   };
   const tcvKeys = Object.keys(tcv);
   if (tcvKeys.length) {
-    html += `<div class="card"><h3>tri/cat 双窗口有效性检验(tri_model_validity.py)<span class="tag warn-tag">与 ens_60 逐项对照</span></h3>
+    html += `<div class="card"><h3>tri/cat 双窗口有效性检验(tri_model_validity.py)<span class="tag warn-tag">对照组 = 旧口径 ens_60(≠ 生产 ens_cat_60)</span></h3>
       <div class="btn-row"><button class="btn" onclick="runEvolve('tri_cat_validity')">重新跑检验(2-5 分钟)</button></div>
       <p class="dim">全窗 = 研究 walk-forward(2021-08-02 → 2026-05-29);折6 段 = cat 冻结新训 + 生产 mlp/lgb 合成(tri 逐日秩平均)。函数与门槛全部复用 model_validity.py 同一套(IC/单调/calibration/时间稳定/衰减/DM/风格中性)。</p>
+      <p class="dim red">⚠ 对照臂 ens_60 = rank(MLP)+rank(LGB) 是 2026-10-10 迁移前的旧集成,与生产在跑的 ens_cat_60(含 CatBoost)不同构,本卡数值不能直接等同生产口径(生产信号健康看上方「模型健康」卡,其数据源为 model_validity_trend.json)。</p>
       <div class="grid two">${tcvKeys.map(tcvRows).join("")}</div>
     </div>`;
   }
@@ -1627,26 +1696,47 @@ async function runEvolve(task, reload) {
 
 /* ── 启动 ─────────────────────────────────────────────────────────── */
 /* ── 01 批量训练对比(多组合) ───────────────────────────────────────── */
-const BT_FEATS = [{ k: "base", t: "base · 26" }, { k: "swing", t: "swing · 33 ★" }, { k: "knife", t: "knife · 32" }, { k: "ar", t: "ar · 27" }];
 const BT_MODELS = ["main", "mlp", "high", "low", "lgb_hl"];
+// 特征集列表: 标签/维度一律来自后端 feat_labels(读 models/config.json),
+// 前端不写死 —— 「swing · 33」在 2026-10-10 重训后实测是 32。
+const BT_FEAT_KEYS = ["base", "swing", "knife", "ar"];
+let _FEAT_LABELS = {};          // 由 renderTrain 每次刷新时填入
+let _FEAT_LABELS_READY = false;
+function _refreshFeatLabels(st) {
+  const fl = (st && st.feat_labels) || {};
+  if (Object.keys(fl).length) { _FEAT_LABELS = fl; _FEAT_LABELS_READY = true; }
+}
+function btFeats() {
+  const t = k => {
+    if (_FEAT_LABELS_READY && _FEAT_LABELS[k]) return _FEAT_LABELS[k];
+    return (k === "swing" ? "swing · 32特征(生产冠军) ★" : k + " · ?特征");
+  };
+  return BT_FEAT_KEYS.map(k => ({ k, t: t(k) }));
+}
+function featOptions(keys) {
+  return (keys || BT_FEAT_KEYS).map(k => {
+    const t = (_FEAT_LABELS_READY && _FEAT_LABELS[k]) || (k + " · ?特征");
+    return `<option value="${k}">${esc(t)}</option>`;
+  }).join("");
+}
 
 function batchTrainCard(s, mt) {
   const mem = (s.batch_matrix || []).map(x => x[0] + "|" + x[1]);
   let h = `<div class="card"><h3>批量训练对比(一次勾选多个 模型×特征,逐项排队训练)<span class="tag warn-tag">输出实验目录</span></h3>
-    <table class="grid-tbl bt-matrix"><thead><tr><th>模型类型</th>${BT_FEATS.map(f => `<th>${f.t}</th>`).join("")}</tr></thead><tbody>`;
+    <table class="grid-tbl bt-matrix"><thead><tr><th>模型类型</th>${btFeats().map(f => `<th>${f.t}</th>`).join("")}</tr></thead><tbody>`;
   for (const k of BT_MODELS) {
     const sp = mt[k];
     if (!sp || !sp.feat) continue;
-    const allow = sp.feat === true ? BT_FEATS.map(f => f.k) : ["base", "swing"];
+    const allow = sp.feat === true ? btFeats().map(f => f.k) : ["base", "swing"];
     h += `<tr><td><b title="${esc(sp.label)}">${esc(k)}</b></td>`;
-    for (const f of BT_FEATS) {
+    for (const f of btFeats()) {
       if (!allow.includes(f.k)) { h += `<td class="dim" style="text-align:center">—</td>`; continue; }
       h += `<td style="text-align:center"><label class="chk"><input type="checkbox" class="btCell" value="${k}|${f.k}" ${mem.includes(k + "|" + f.k) ? "checked" : ""}></label></td>`;
     }
     h += `</tr>`;
   }
   h += `</tbody></table>
-    <p class="dim">★=生产冠军特征集(swing·33)。逐项顺序训练(与单跑同一任务槽),每项输出 models_experiment/batch_&lt;ts&gt;/NN_&lt;model&gt;_&lt;feat&gt;/;完成后按折6样本外指标自动排序对比。</p>
+    <p class="dim">★=生产冠军特征集(维度见下拉,来源 models/config.json)。逐项顺序训练(与单跑同一任务槽),每项输出 models_experiment/batch_&lt;ts&gt;/NN_&lt;model&gt;_&lt;feat&gt;/;完成后按折6样本外指标自动排序对比。</p>
     <div class="form-grid inline">
       <label>Epochs <input id="batchEpochs" type="number" value="${s.batch_epochs || 40}" min="1" max="200"></label>
       <label>留出测试集(月) <input id="batchHoldout" type="number" min="0" max="36" value="${s.batch_holdout || 0}" title="每项把窗口末尾 N 个月作为真测试集(训练不可见),跑完后按留出集指标对比排序。0=不启用。"></label>
@@ -1726,7 +1816,7 @@ function batchJobsTable(bts, mt) {
     h += `<p class="dim">⚠ 上一批被停止/中断:${stuck} 项停在「训练中」(未写入结束状态)。继续在下方勾选新组合开新批即可;残留目录可手动删除。</p>`;
   }
   if (done.length) {
-    h += `<p class="dim">${hasHo ? "排序键 = 留出测试集 Sharpe(窗口末尾 N 月,训练不可见,ens_60 逐日 Top30 标签均值序列年化 √252;IC=逐日秩相关均值与 t)。" : "排序键 = 折6样本外 Sharpe(output/fold6_&lt;feat&gt;_result.json,同特征集同架构独立折6,main/mlp 才可比;high/low/lgb_hl 目标不同不排此轴)。"}完成 ${done.length}/${rows.length}。留出集 Sharpe 是信号代理(60d 前向标签),非真实回测;真实绩效需部署后走回测页引擎。</p>`;
+    h += `<p class="dim">${hasHo ? "排序键 = 留出测试集 Sharpe(窗口末尾 N 月,训练不可见,实验自身 ens_h(=rank(MLP)+rank(LGB),旧集成口径,≠ 生产 ens_cat_60) 逐日 Top30 标签均值序列年化 √252;IC=逐日秩相关均值与 t)。" : "排序键 = 折6样本外 Sharpe(output/fold6_&lt;feat&gt;_result.json,同特征集同架构独立折6,main/mlp 才可比;high/low/lgb_hl 目标不同不排此轴)。"}完成 ${done.length}/${rows.length}。留出集 Sharpe 是信号代理(60d 前向标签),非真实回测;真实绩效需部署后走回测页引擎。</p>`;
   } else if (bts.batch_active) {
     h += `<p class="dim">首项训练进行中…(每项完成后自动加入表内并实时刷新;日志见上方「运行日志」)。</p>`;
   } else {
@@ -1742,9 +1832,10 @@ function renderBatchBox(bts, mt) {
 }
 
 /* ── 06 候选特征流水线 ─────────────────────────────────────────────── */
-function runbookCardHtml(rb, rst) {
+function runbookCardHtml(rb, rst, meta) {
   /* 标准重训 17 步 SOP 映射卡(runbook ↔ 链阶段)。
-     rb = research_worker.RUNBOOK_STEPS; rst = web_research_state.json(最近一轮)。
+     rb = research_worker.RUNBOOK_STEPS; rst = web_research_state.json(最近一轮);
+     meta = /api/research/status 顶层(as_of / basis / age_days, 见 web/staleness.py)。
      分类: ✅链内自动 / 👤人工 / ⏭设计内跳过 / 🗓周链自动。
      本轮进度只对 chain=research 的 auto 行标: ✓=done · …=进行中。 */
   if (!Array.isArray(rb) || !rb.length) return "";
@@ -1753,6 +1844,28 @@ function runbookCardHtml(rb, rst) {
   const isFull = (rst && rst.mode) === "full";
   const seam = ((rst && rst.seam_check) || {}).rows || [];
   const seamBad = seam.filter(r => r.ok === false).length;
+  // as-of: 渲染 state 自己的 started_at/finished_at + 距今天数(>3 天黄字)。
+  // ⚠ 不用文件 mtime —— Phase 6 迁移把 output/ 的 mtime 批量刷成「今天」, 只看 mtime
+  //   会把 6 天前跑完的那一轮显示成「刚跑完」。
+  const daysAgo = (s) => {
+    const t = Date.parse(String(s || "").replace(" ", "T"));
+    return isNaN(t) ? null : Math.floor((Date.now() - t) / 86400000);
+  };
+  const tStart = daysAgo(rst && rst.started_at);
+  const tEnd = daysAgo(rst && rst.finished_at);
+  const ageD = tEnd != null ? tEnd : tStart;          // 结束时间优先; 未结束退回开始时间
+  const staleSop = ageD != null && ageD > 3;
+  const sopTime = (rst && (rst.started_at || rst.finished_at))
+    ? `最近一轮: 开始 ${esc(rst.started_at || "—")}`
+      + `${rst.finished_at ? ` · 结束 ${esc(rst.finished_at)}` : " · 尚未结束"}`
+      + ` · ${ageD != null ? `距今 ${ageD} 天` : "距今天数未知"}`
+      + (staleSop ? ` <span class="warn">⚠ 已 ${ageD} 天未重跑(>3 天), 本轮进度不代表当前状态</span>` : "")
+    : `<span class="warn">⚠ 日期未知: web_research_state.json 无 started_at/finished_at</span>`;
+  const basisTxt = (meta && meta.basis)
+    ? (meta.basis === "content"
+        ? `判新依据 basis=content(as_of ${esc(meta.as_of || "—")})`
+        : `<span class="warn">⚠ 判新依据 basis=${esc(meta.basis)} —— 日期不可信(仅文件 mtime, 可能被批量改写)</span>`)
+    : "";
   const modeTag = { auto: ["✅ 链内自动", "ok-tag"], manual: ["👤 人工", "warn-tag"],
                     skipped: ["⏭ 设计内跳过", ""] };
   const rows = rb.map(s => {
@@ -1777,6 +1890,7 @@ function runbookCardHtml(rb, rst) {
   return `<div class="card"><h3>标准重训 17 步 SOP 映射<span class="tag">docs/pipeline-runbook.md</span></h3>
     <p class="dim">链 = 本页「一键标准重训流水线」全量版(16 步进链, 第 15 步跳过、第 17 步切换人工);
       本轮进度取最近一次运行状态${isFull ? "(全量版)" : "(快速版, 无进度)"}。</p>
+    <p class="dim">${sopTime}${basisTxt ? ` · ${basisTxt}` : ""}</p>
     <div class="table-scroll"><table class="grid-tbl"><thead><tr>
       <th>步</th><th>内容</th><th>链阶段</th><th>分类</th><th>本轮</th><th>备注</th>
     </tr></thead><tbody>${rows}</tbody></table></div></div>`;
@@ -1785,10 +1899,10 @@ function runbookCardHtml(rb, rst) {
 async function renderPipeline() {
   pollDrop("pipe");
   const el = pageEl("pipeline");
-  el.innerHTML = `<div class="loading">加载标准重训流水线…</div>`;
+  el.innerHTML = loadingBox("加载标准重训流水线…");
   let st;
   try { st = await api("/api/pipeline/status"); }
-  catch (e) { el.innerHTML = `<div class="err-box">加载失败: ${esc(e.message)}</div>`; return; }
+  catch (e) { el.innerHTML = errBox(e.message); return; }
   const stages = st.stages || {};
   const m = stages.mined || {}; const reg = stages.registry || {};
   const aq = stages.arena_queue || {}; const ar = stages.arena_models || {};
@@ -1796,11 +1910,11 @@ async function renderPipeline() {
   const active = st.job.active;
 
   // ── 标准重训 17 步 SOP 映射(runbook ↔ 链阶段; 数据源 research_worker.RUNBOOK_STEPS,
-  //    经 /api/research/status 透出; 拿不到则降级不渲染, 不阻断缺口诊断) ──
+  //    经 /api/research/status 透出; as_of/basis 取该接口顶层, 拿不到则降级不渲染) ──
   let rbHtml = "";
   try {
     const rr = await api("/api/research/status");
-    rbHtml = runbookCardHtml(rr.runbook || [], rr.state || {});
+    rbHtml = runbookCardHtml(rr.runbook || [], rr.state || {}, rr);
   } catch (_) { /* 老后端无 runbook 字段 → 跳过本卡 */ }
 
   const gRow = (label, n, warn) => `<tr><td>${label}</td><td><b class="${n > 0 && warn ? "neg" : ""}">${n}</b></td><td class="dim">${warn ? "⚠ 缺口:未自动进入下一阶段" : "已衔接"}</td></tr>`;
@@ -1847,7 +1961,7 @@ async function renderPipeline() {
     }
     html += `</tbody></table></div>`;
   } else html += `<p class="warn">${esc(m.message || "暂无自动挖掘结果")}</p>`;
-  html += `<p class="dim">运行:自进化页「周末自进化」含挖掘步骤,或命令行 python src/auto_feature_mining.py(研究池;达标 = IC ≥ 0.03 且非单列重复)。</p></div>`;
+  html += `<p class="dim">运行:自进化页「周末自进化」含挖掘步骤,或命令行 python features_pkg/auto_feature_mining.py(研究池;达标 = IC ≥ 0.03 且非单列重复)。</p></div>`;
 
   const dist = reg.status_dist || {};
   html += `<div class="card"><h3>② 9起点复核登记表(feature_candidates.json)</h3>
@@ -1859,7 +1973,7 @@ async function renderPipeline() {
       const cls = st2 === "通过" ? "ok-tag" : (st2 === "待复核" ? "warn-tag" : "");
       html += `<tr><td><b>${esc(r.name)}</b></td><td class="dim">${esc(r.expr || "")}</td><td><span class="tag ${cls}">${esc(st2)}</span></td><td>${esc(r.queued_at || "—")}</td><td>${esc(r.source || "—")}</td><td>${fmt(r.quick_ic_60d, 4)}</td></tr>`;
     }
-    html += `</tbody></table></div><p class="dim">复核由 src/feature_rolling_review.py --candidates 消费待审队列(9 个滚动起点 × 双窗口,通过才推竞技场)。</p>`;
+    html += `</tbody></table></div><p class="dim">复核由 features_pkg/feature_rolling_review.py --candidates 消费待审队列(9 个滚动起点 × 双窗口,通过才推竞技场)。</p>`;
   } else html += `<p class="warn">${esc(reg.message || "登记表为空")}</p>`;
   html += `</div>`;
 

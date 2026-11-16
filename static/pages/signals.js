@@ -9,14 +9,18 @@ let BT_REPORT = null;  // 最近一次普通回测报告(供导出用)
 // 平级返回)。分开存是因为它们不在 web_bt_report.json 里, 导出时也要能带上。
 let BT_PROD = null;
 let BT_OVERFIT = null;
+// 回测页的口径事实源(base_label / sleeve / decay_cap, 由 /api/backtest/report.caliber
+// 下发)。⚠ 口径描述**只许**走这个字段 —— 前端写死「Top30 / DD8+VT18」正是 2026-09-14
+// 更正时残留的错标签, 后来一直在骗人。
+let BT_CAL = null;
 
 async function renderSignals() {
   pollDrop("sg");
   const el = pageEl("signals");
-  el.innerHTML = `<div class="loading">加载信号…</div>`;
+  el.innerHTML = loadingBox("加载信号…");
   let st, latest, cfg;
   try { [st, latest, cfg] = await Promise.all([api("/api/signals/status"), api("/api/signals/latest"), api("/api/config")]); }
-  catch (e) { el.innerHTML = `<div class="err-box">加载失败: ${esc(e.message)}</div>`; return; }
+  catch (e) { el.innerHTML = errBox(e.message); return; }
   const s = (cfg && cfg.settings) || {};
 
   const active = st.status.active;

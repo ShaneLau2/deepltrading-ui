@@ -3,7 +3,21 @@
 
 /* 00 总览 · 平均年化增长卡片(CAGR 主值 + 实际逐年年化 + α 分解)。
    基准 symbol 与净值曲线共用(同 localStorage 键, 切任一即双双重算)。 */
-function buildGrowthCard(g) {
+/* 生产基座口径名 + 衰减封顶标注(唯一事实源 = 后端 caliber.base_label / caliber.decay_cap)。
+   ⚠ 绝不写死「裸 k30」: 2026-09-28 起组合构建层是袖袋交错执行, 结构读 champion_config,
+   后端改配置后标签自动跟上; 读不到时降级成不含结构数字的通用说法, 不猜。 */
+function prodBaseLabel(cal) {
+  const b = (cal && cal.base_label) || "";
+  return b ? `<b>${esc(b)}</b>` : "<b>生产袖袋基座</b>";
+}
+
+function decayCapTxt(cal) {
+  const c = cal && cal.decay_cap;
+  if (c && c.active && c.cap != null) return ` · <b class="warn">含衰减封顶(暴露 ≤ ${fmt(c.cap, 2)})</b>`;
+  return "";
+}
+
+function buildGrowthCard(g, cal) {
   if (!g || !g.available || !Array.isArray(g.years) || !g.years.length) return "";
   const yrs = g.years;
   const bench = g.bench_symbol || "SPY";
@@ -61,7 +75,7 @@ function buildGrowthCard(g) {
         <th>平均暴露</th><th>β(对${esc(bench)})</th><th>市场贡献</th><th>α(去β)</th><th>区间</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
     ${indNote}
-    <p class="dim">口径: <b>V2 生产</b>(裸 k30 × DD阶梯×IC) / <b>V2裸</b>(去风控覆盖 ∏(1+net/暴露)) / <b>${esc(bench)}</b>(同窗口)。` +
+    <p class="dim">口径: <b>V2 生产</b>(${prodBaseLabel(cal)} × DD阶梯×IC 暴露${decayCapTxt(cal)}) / <b>V2裸</b>(去风控覆盖 ∏(1+net/暴露)) / <b>${esc(bench)}</b>(同窗口)。` +
       `<b>市场贡献</b> = 该年 β × ${esc(bench)}实际(β 用该年日收益对基准区间对齐回归;champion 曲线为信号日口径, 日 d 收益在 d→d+1 实现);` +
       `<b>α(去β)</b> = (1+实际)/(1+市场贡献) − 1, 即剔除市场 beta 后的选股/择时/风控净效果。` +
       `每年末回撤与年内最深回撤列见「验证证据链快照 ⑤」(存档)。数据源 data/champion_equity.csv。切换基准 → α 列/市场贡献/β 实时重算。</p>
@@ -87,7 +101,7 @@ async function refreshOverviewBench(sym) {
     const h3 = document.querySelector("#page-overview h3");
     if (h3) h3.textContent = `净值曲线 · V2 生产 / V2裸 / ${used}(三线同图)`;
     const wrap = document.getElementById("growthCardWrap");
-    if (wrap) { wrap.innerHTML = buildGrowthCard(gd && gd.available ? gd : null); attachBenchListeners(); }
+    if (wrap) { wrap.innerHTML = buildGrowthCard(gd && gd.available ? gd : null, window.OV_CAL); attachBenchListeners(); }
     if (nd && !nd.available) toast(`基准 ${used} 无行情数据`, false);
   } catch (err) {
     toast("基准切换失败: " + err.message, false);
@@ -116,7 +130,7 @@ function fmtWindow(w) {
 /* ── 00 总览 ──────────────────────────────────────────────────────── */
 async function renderOverview() {
   const el = pageEl("overview");
-  el.innerHTML = `<div class="loading">加载总览…</div>`;
+  el.innerHTML = loadingBox("加载总览…");
   let data, eq, ic, syms, g0, labRuns;
   const benchSym0 = (localStorage.getItem("ov_bench_sym") || "QQQ").toUpperCase();
   try { [data, eq, ic, syms, g0, labRuns] = await Promise.all([
@@ -127,7 +141,7 @@ async function renderOverview() {
       api(`/api/overview/growth?symbol=${encodeURIComponent(benchSym0)}`).catch(() => null),
       api("/api/lab/runs?limit=5").then(r => (r && r.runs) || [], () => []),
     ]); }
-  catch (e) { el.innerHTML = `<div class="err-box">加载失败: ${esc(e.message)}</div>`; return; }
+  catch (e) { el.innerHTML = errBox(e.message); return; }
   const benchSym = (eq && eq.bench_symbol) || benchSym0;
   // 年化卡片与净值图共用基准: 优先按当前 symbol 拉取, 失败回退 /api/overview 内嵌 SPY 版
   const growthData = (g0 && g0.available) ? g0 : (data.growth || null);
@@ -139,10 +153,25 @@ async function renderOverview() {
   const sig = data.latest_signal || {};
 
   const win = fmtWindow(rm.window);
+  // 13 变体净值的有效区间(后端裁掉了全平线尾部): 这张图不是日更的 —— 冻结评估窗,
+  // 末段 13 条线全 100% 现金, 不裁的话轴铺到 panel 末日会显得「刚更新过」
+  const vn0 = data.variant_nav || {};
+  const vwn = vn0.window || {};
+  const vwin = (vwn.start && vwn.end) ? `${esc(vwn.start)} → ${esc(vwn.end)}` : "";
+  const vwinTag = vwin
+    ? ` <span class="dim" style="font-weight:normal">· ${vwin}</span>`
+      + (vwn.flat_tail_days ? ` <span class="dim warn" style="font-weight:normal">· 已裁掉尾部 ${esc(vwn.flat_tail_days)} 天纯现金平线</span>` : "")
+    : "";
   const tiles = [
     tile("V2 净值(生产)", fmt(ch.eq, 2), `${ch.date || "—"} · 起点 1 元 → 当前 ${fmt(ch.eq, 2)} 元`, "green"),
-    tile("V2 回撤(当前)", fmtPct(ch.dd), `${ch.date || v2.date || "—"} · 距历史最高点回落 · 当日仓位 ${fmtP(ch.exposure, 0)}`, ch.dd < -0.08 ? "red" : (ch.dd < -0.03 ? "amber" : "green")),
-    tile("当前仓位(风控后)", fmtP(v2.composite_exposure, 0), v2.ic_fallback ? "⚠ 风控回退: 仅按回撤降仓" : `系统按回撤+模型强度自动调仓 · 60日IC ${fmtP(v2.ic_rolling_mean_60)}`, "amber"),
+    // ⚠ 措辞修过(2026-11-02): 这两格原来同时写「当日仓位 45%」和「当前仓位 70%」,
+    //   同屏两个"仓位"差 25 个点还不标口径 —— 前者的 45% 来自 `data/champion_equity.csv`
+    //   (研究面板口径的**回测曲线档位**), 后者才是生产实盘用的 V2 暴露
+    //   (`output/v2_exposure_now.json`, 台账口径)。用户按前者理解实盘仓位就会错。
+    //   净值曲线本身仍是研究口径, 所以这里改成"回测曲线档位"并显式标"非实盘仓位"。
+    tile("V2 回撤(当前)", fmtPct(ch.dd), `${ch.date || v2.date || "—"} · 距历史最高点回落 · 回测曲线档位 ${fmtP(ch.exposure, 0)}(研究面板口径, 非实盘仓位)`, ch.dd < -0.08 ? "red" : (ch.dd < -0.03 ? "amber" : "green")),
+    tile("当前仓位(风控后)", fmtP(v2.composite_exposure, 0), v2.ic_fallback ? "⚠ 风控回退: 仅按回撤降仓" : `实盘按此降仓(台账口径) · 系统按回撤+模型强度自动调仓 · 60日IC ${fmtP(v2.ic_rolling_mean_60)}`, "amber"),
+
     tile("模型 IC(60日)", fmt(mv.ic, 4), `预测与未来60日收益的相关性,越接近1越准 · t=${fmt(mv.t_nw, 1)} · ${mv.date || "—"}`, mv.ok ? "green" : "red"),
     tile("OOS IC(样本外)", fmt(mv.oos_ic, 4), mv.oos_ok ? "样本外预测力 · 显著通过 ✅" : "样本外预测力未通过 ⚠", mv.oos_ok ? "green" : "red"),
     tile("Sharpe(全期)", fmt(rm.sharpe, 2), `收益风险比(越高越好) · Sortino ${fmt(rm.sortino, 2)} · ${esc(win)}`, "green"),
@@ -152,13 +181,28 @@ async function renderOverview() {
   ];
 
   const cal = data.caliber || {};
+  window.OV_CAL = cal;  // 基准切换时 growthCard 重建也要同一份口径事实源
+  // 生产模型/特征集口径: 一律来自 caliber.model(后端读 models/config.json),
+  // 前端不写死 —— 「ens(swing-33)」在 2026-10-10 换冠后即成错话。
+  const mdl = cal.model || {};
+  const modelLabel = (mdl.read_ok && (mdl.signal_col || mdl.ensemble))
+    ? `${mdl.signal_col || "score_60"} · 特征集 ${mdl.feat_set || "—"}${mdl.n_features != null ? " · " + mdl.n_features + " 维" : ""}`
+    : "生产模型(见 models/config.json)";
   const guardOk = !!(cal.guard && cal.guard.verdict === "ok");
   const guardTxt = guardOk
     ? `<span class="tag ok-tag">守卫 ✓</span>`
     : `<span class="tag err-tag">守卫 ✗ 漂移</span>`;
 
+  // IC 趋势图角标: 只认**内容日期**(model_validity_history.jsonl 末行 date)——
+  // basis !== "content" 时只有文件 mtime, 必须写「日期不可信」, 不许把 mtime 当数据截止日。
+  const icAsOf = ic && ic.available
+    ? (ic.basis === "content" && ic.as_of
+        ? ` · 数据止 ${esc(ic.as_of)}${ic.stale ? ` <span class="warn">⚠ 已 ${esc(ic.age_days)} 天未更新</span>` : ""}`
+        : ` · <span class="warn">⚠ 日期不可信(仅 mtime${ic.mtime ? ` ${esc(ic.mtime)}` : ""})</span>`)
+    : "";
+
   const benchEsc = esc(benchSym);
-  const growthHtml = buildGrowthCard(growthData);
+  const growthHtml = buildGrowthCard(growthData, cal);
   let html = `<div class="grid tiles">${tiles.join("")}</div>
   <div id="growthCardWrap">${growthHtml}</div>
   <details class="caliber-panel">
@@ -171,6 +215,8 @@ async function renderOverview() {
       <tr><td>风控指标表 risk_metrics.md</td><td>→ ${esc(cal.risk_metrics_end || "—")}(OOS 面板末, 同配置同口径)</td></tr>
       <tr><td>V2 暴露快照 v2_exposure_now.json</td><td>${esc(cal.v2_exposure_date || "—")}(每日执行暴露)</td></tr>
       <tr><td>口径守卫 caliber_guard.py</td><td>${guardOk ? "✓ 通过" : "✗ 脱节"} · 最近检查 ${esc((cal.guard && cal.guard.checked_at) || "—")}。每日/每周链自动对拍曲线 vs 审计表, 脱节即硬失败阻断(2026-09-05 −8.3% vs −10.2% 分叉事故的防线)。</td></tr>
+       <tr><td>生产基座口径</td><td>${prodBaseLabel(cal)}${(cal.sleeve && cal.sleeve_enabled) ? ` · 每 ${cal.sleeve.horizon} 个交易日只有 1 个袖袋到期换仓, 播种 ${cal.sleeve.seed_mode || "ramp"}` : ""} · 结构读 champion_config.json → config.袖袋执行(唯一事实源 <code>sleeves.production_base_label()</code>, 本行不硬编码)。⚠ 旧文案「裸 k30 / Top30 60D 整仓换」是 2026-09-28 之前的架构, 已作废。</td></tr>
+       <tr><td>衰减封顶</td><td>${(() => { const c = cal.decay_cap; if (!c || !c.read_ok) return "<span class='dim'>未读取到(data/decay_state.json 缺失或损坏)</span>"; if (!c.active) return "当前未封顶(exposure_override 为空或 = 1.0) —— 生产暴露 = 纯 DD阶梯×IC"; return `已启用 <b class="warn">暴露封顶 ≤ ${fmt(c.cap, 2)}</b> · 滚动 IC ${c.roll_ic != null ? fmt(c.roll_ic, 4) : "—"}(as_of ${esc(c.as_of || "—")}) · 源 ${esc(c.ic_source || "—")}(${esc(c.ic_caliber || "—")})。decay_monitor 在滚动 IC 跌破阈值时写入, champion._v2_equity 用 min(暴露, 封顶值) 压住生产暴露(是封顶, 不是相乘)。<b class="warn">回测页「V2 叠加」as-if 行不含这个封顶</b> ⇒ 两条线均值暴露差约 0.16、末端指标差近 2 倍, 不能把 as-if 数字当生产业绩。`; })()}</td></tr>
     </tbody></table>
   </details>
   <div class="grid two">
@@ -183,13 +229,14 @@ async function renderOverview() {
         </label>
       </div>
       <canvas id="ovEquity"></canvas>
-      <p class="dim">三线 = 同一裸 k30 基座的三条路径: <b>V2 生产</b>(裸 k30 × DD阶梯×IC 暴露, 2026-08-27 起生产, 周报/日报同源) · <b>V2裸</b>(去覆盖反解 net/exposure, 已核对与周报裸基线同源: MDD −51.2% / 终值 13.9) · <b>${benchEsc}</b>(Close 归一同起点)。<b>叠加回撤 = 每一条线各自的自身回撤</b>(各自净值相对自身历史峰值, 右轴%): 生产很浅(−10%), 裸很深(−51%), 基准居中——三条回撤不同源不同刻度, 别拿生产线的浅回撤当成裸的。裸更高 ≠ 更优: V2 用浅回撤换终值。基准可在上方输入框换成任意 panel 内 symbol(记忆上次选择)。</p>
+      <p class="dim">三线 = 同一生产基座的三条路径: <b>V2 生产</b>(${prodBaseLabel(cal)} × DD阶梯×IC 暴露${decayCapTxt(cal)}, 2026-08-27 起生产, 周报/日报同源) · <b>V2裸</b>(去覆盖反解 net/exposure, 已核对与周报裸基线同源: MDD −51.2% / 终值 13.9) · <b>${benchEsc}</b>(Close 归一同起点)。<b>叠加回撤 = 每一条线各自的自身回撤</b>(各自净值相对自身历史峰值, 右轴%): 生产很浅(−10%), 裸很深(−51%), 基准居中——三条回撤不同源不同刻度, 别拿生产线的浅回撤当成裸的。裸更高 ≠ 更优: V2 用浅回撤换终值。基准可在上方输入框换成任意 panel 内 symbol(记忆上次选择)。</p>
     </div>
     <div class="card"><h3>模型有效性 IC 趋势(周检)</h3><canvas id="ovIc"></canvas></div>
   </div>
-  <div class="card"><h3>13 变体统一净值对比(同协议 · prod_full = 现役全量重训对照)</h3>
+  <div class="card"><h3>13 变体统一净值对比(同协议 · prod_full = 现役全量重训对照)${vwinTag}</h3>
     <canvas id="ovVariants" style="height:340px"></canvas>
-    <p class="dim">12 挑战者 + <b class="warn">prod_full 现役对照(白线)</b>全部同协议统一净值(Top30 + Hybrid B + VT15 + DD8 · 20bps · 起点归一)。数据源 output/mlp_variant_nav.json(mlp_variant_comparison.py)。集成行含 cat / ens_cat / ens_trio(tri);现役实盘见过评估窗,原样判分虚高,prod_full 以 cut 为界全量重训,是「打败现役了吗」的诚实基准。</p>
+    <p class="dim">12 挑战者 + <b class="warn">prod_full 现役对照(白线)</b>全部同协议统一净值(Top30 + Hybrid B + VT15 + DD8 · 20bps · 起点归一)。数据源 output/mlp_variant_nav.json(mlp_variant_comparison.py)。集成行含 cat / ens_cat / ens_trio(tri);现役实盘见过评估窗,原样判分虚高,prod_full 以 cut 为界全量重训,是「打败现役了吗」的诚实基准。
+    ${vwin ? `<br><b class="warn">⚠ 这张图不是日更的</b>: 13 条线是一次性重训的<b>冻结评估</b> —— 信号在 ${esc(vwn.signal_freeze || "—")} 后不再入场、持仓 60 日到期清仓,末端就全是纯现金平线,已裁掉。真实区间 ${vwin};面板数据已到 ${esc(vwn.panel_last || "—")}。要真正延伸到面板末日需重跑 <code>.venv/bin/python research_pkg/mlp_variant_comparison.py</code>(数小时),研究链控制台刷新阶段会自动跑一次。<b>对比表的 Sharpe/CAGR 含那段纯现金尾巴</b>,是被摊薄后的数字 —— 别拿它直接比现役实盘。` : ""}</p>
   </div>
   <div class="card"><h3>周报图表(共用模块 · 与部署周报同源数据)</h3>
     <div id="ovWeekly"></div>
@@ -249,7 +296,7 @@ async function renderOverview() {
         note = `末日 ${esc(pp.last)} · 冻结线处,按 FROZEN 规则 2027-01-01 前只读不扩`;
       }
       else if (pp.behind == null || pp.behind <= 0) { tag = "✅ 新鲜"; tcls = "ok-tag"; note = `末日 ${esc(pp.last)} = 最新交易日`; }
-      else { tag = `⚠ 落后 ${pp.behind} 交易日`; tcls = "err-tag"; note = `末日 ${esc(pp.last)} · 应到 ${esc(pf.latest_date || "最新")} —— 盘后链(2b1 步)在下一交易日自动延展(oos_fold_extend --append,预测冻结不重训);持续落后可手动补跑: .venv/bin/python src/oos_fold_extend.py --append`; }
+      else { tag = `⚠ 落后 ${pp.behind} 交易日`; tcls = "err-tag"; note = `末日 ${esc(pp.last)} · 应到 ${esc(pf.latest_date || "最新")} —— 盘后链(2b1 步)在下一交易日自动延展(oos_fold_extend --append,预测冻结不重训);持续落后可手动补跑: .venv/bin/python research_pkg/oos_fold_extend.py --append`; }
       return `<tr><td><b>${esc(pp.name)}</b></td><td>${esc(pp.last || "—")}</td><td><span class="tag ${tcls}">${tag}</span></td><td class="dim">${esc(pp.desc)}</td><td class="dim">${note}</td></tr>`;
     }).join("");
     html += `<div class="card"><h3>OOS 面板数据末日<span class="tag warn-tag">冻结线 ${esc(pf.freeze_line || "—")}</span></h3>
@@ -286,7 +333,7 @@ async function renderOverview() {
         <button class="btn" onclick="exportValidationSnapshot('md')">导出快照 .md</button>
         <button class="btn" onclick="exportValidationSnapshot('html')">导出快照 .html</button>
       </div>
-      <p class="${vc.level === "green" ? "ok" : vc.level === "amber" ? "warn" : "err-box"}">${vcLevel[1]} ${esc(vc.note || "")} —— 判定对象: 生产配置 ens(swing-33) · 冻结</p>
+      <p class="${vc.level === "green" ? "ok" : vc.level === "amber" ? "warn" : "err-box"}">${vcLevel[1]} ${esc(vc.note || "")} —— 判定对象: 生产配置 ${esc(modelLabel)} · 冻结</p>
       <div class="table-scroll"><table class="grid-tbl"><thead><tr><th>验证链</th><th>数据日期</th><th>判定</th><th>明细</th></tr></thead><tbody>${vcRows}</tbody></table></div>
       <p class="dim">全部读本地文件,零计算: 折6(fold6_*_result.json, IC 显著性 t≥2 判过) · 参数体检(param_health.json, 双窗口最优点是否漂移) · 9起点(rolling_review.csv, base 基准 9 起点 Sharpe 是否全正) · 竞技场(model_arena.csv, 生产模型是否在双窗口通过名单)。参数体检漂移 = 最优点随窗口移动的敏感性警示,不直接等于模型失效;各链详情见对应页面卡片。</p>
     </div>`;
@@ -366,7 +413,7 @@ async function renderOverview() {
     // 对比任务未重跑过(08-24 后), 曲线缺失是产物缺失不是渲染 bug。
     const el = document.getElementById("ovVariants");
     if (el) {
-      el.outerHTML = `<p class="dim warn" style="min-height:340px;margin:0;display:flex;align-items:center;justify-content:center">⚠ 13 变体净值未生成(缺 output/mlp_variant_nav.json)—— 需重跑 13 变体对比:<br>研究链控制台刷新阶段, 或 .venv/bin/python src/mlp_variant_comparison.py(数小时, 顺带刷新对比表与生产身份快照)。</p>`;
+      el.outerHTML = `<p class="dim warn" style="min-height:340px;margin:0;display:flex;align-items:center;justify-content:center">⚠ 13 变体净值未生成(缺 output/mlp_variant_nav.json)—— 需重跑 13 变体对比:<br>研究链控制台刷新阶段, 或 .venv/bin/python research_pkg/mlp_variant_comparison.py(数小时, 顺带刷新对比表与生产身份快照)。</p>`;
     }
   }
   // 周报图表(共用模块): 与部署周报同一渲染模块/数据源, dark 主题由后端注入

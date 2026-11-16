@@ -10,7 +10,7 @@ const LAB_DIFF = { a: null, b: null };   // 对比选中的两条 run_id(实验�
 async function renderLab() {
   pollDrop("lab");
   const el = pageEl("lab");
-  el.innerHTML = `<div class="loading">加载实验流水线…</div>`;
+  el.innerHTML = loadingBox("加载实验流水线…");
   let cat = { stages: [], default_chain: [] };
   let st = { active: false };
   let runs = [];
@@ -78,8 +78,11 @@ function labShell(cat, st, runs) {
   </div>
   <div class="card"><h3>评分(最近一次含 metrics 的实验)${labFreshTag(lastScored)}</h3>
     <div class="lab-metrics">${labMetricTiles(lastMetrics)}</div>
-    <p class="dim">评分 = 回测报告(裸/V2 Sharpe·MDD)+ 模型竞技场冠军 + 滚动 IC(实时口径,滞后约 60 交易日)
-      三源 collect,由评分阶段写入实验记录;各源缺源时如实标注在记录 note。</p>
+    <p class="dim">评分 = 回测报告(裸/V2 Sharpe·MDD)+ 模型竞技场冠军 + 滚动 IC / ICIR(实时口径,滞后约 60 交易日)
+      三源 collect,由评分阶段写入实验记录;各源缺源时如实标注在记录 note。
+      <b>ICIR = 滚动 IC ÷ 其 NW 标准误</b>(同窗同尺), 量级 = 当前 60 日窗口的 IC 高出零多少个标准误;
+      它<b>不是年化</b>、也不是日间 std 算的(60 日前瞻标签重叠 ⇒ 日间非独立, 口径见 ICIR 卡副标题),
+      且与滚动 IC 同源 ⇒ 实验对比里只<b>展示不参与判优胜场</b>, 避免同一信息投两次票。</p>
   </div>
   <div class="card"><h3>参数扫描<span class="tag">一组参数多值择优 · SCORED_KEYS 胜场法</span></h3>
     <div class="lab-sweep-ctl">
@@ -249,12 +252,13 @@ function labMetricTiles(m) {
   const rows = [
     ["回测 Sharpe(裸)", m.bt_sharpe], ["回测 Sharpe(V2)", m.bt_v2_sharpe],
     ["回测 MDD", m.bt_mdd], ["回测 MDD(V2)", m.bt_v2_mdd],
-    ["滚动 IC", m.roll_ic], ["IC 截止", m.roll_ic_as_of],
+    ["滚动 IC", m.roll_ic], ["滚动 ICIR", m.roll_icir], ["IC 截止", m.roll_ic_as_of],
     ["竞技场冠军", m.arena_top], ["现役 IC(近期)", m.arena_prod_ic_recent],
   ].filter(([, v]) => v !== undefined && v !== null);
   return rows.map(([k, v]) => tile(k,
     typeof v === "number" ? fmt(v, 3) : esc(String(v)),
-    k === "滚动 IC" && m.roll_ic_source ? `源: ${esc(m.roll_ic_source)}` : "")).join("");
+    k === "滚动 IC" ? (m.roll_ic_source ? `源: ${esc(m.roll_ic_source)}` : "")
+      : k === "滚动 ICIR" ? esc(m.roll_icir_caliber || "") : "")).join("");
 }
 
 function labRunsTable(runs) {

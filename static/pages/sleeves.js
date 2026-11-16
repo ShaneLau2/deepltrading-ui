@@ -8,16 +8,16 @@
 
 async function renderSleeves() {
   const el = pageEl("sleeves");
-  el.innerHTML = `<div class="loading">加载袖袋权重流转…</div>`;
+  el.innerHTML = loadingBox("加载袖袋权重流转…");
   let d;
   try { d = await api("/api/sleeve/trace"); }
-  catch (e) { el.innerHTML = `<div class="err-box">加载失败: ${esc(e.message)}</div>`; return; }
+  catch (e) { el.innerHTML = errBox(e.message); return; }
 
   if (!d || !d.available) {
     el.innerHTML = `<h2>袖袋权重流转</h2>
       <div class="warn">${esc((d && d.reason) || "暂无数据")}</div>
       <p class="dim">本页面只读, 不触发换仓、不修改台账。数据来自盘后链
-      <code>src/sleeves.py --run</code> 落下的
+      <code>production_pkg/sleeves.py --run</code> 落下的
       <code>output/sleeve_weights_&lt;date&gt;.csv</code> 快照。</p>`;
     return;
   }

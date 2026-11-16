@@ -18,18 +18,19 @@ function paperMetrics(points) {
   const firstPt = points.find(p => Number(p.equity) > 0);
   const lastPt = points[points.length - 1];
   return { sharpe, maxDd, curDd: last / peak - 1, last,
+    first: firstPt ? Number(firstPt.equity) : null,
     firstDate: firstPt ? firstPt.date : "—", lastDate: lastPt ? lastPt.date : "—" };
 }
 
 async function renderPaper() {
   const el = pageEl("paper");
-  el.innerHTML = `<div class="loading">加载模拟账户…</div>`;
+  el.innerHTML = loadingBox("加载模拟账户…");
   let st, cfg, ov;
   try { [st, cfg, ov] = await Promise.all([
       api("/api/paper/status"), api("/api/config"),
       api("/api/overview").catch(() => null),
     ]); }
-  catch (e) { el.innerHTML = `<div class="err-box">加载失败: ${esc(e.message)}</div>`; return; }
+  catch (e) { el.innerHTML = errBox(e.message); return; }
   const s = (cfg && cfg.settings) || {};
 
   const tiles = [
@@ -71,13 +72,19 @@ async function renderPaper() {
       pm ? `历史最坏: 从最高点最多跌 ${fmtPct(Math.abs(pm.maxDd))} · ${esc(pmWin)}` : "",
       pm ? (pm.maxDd < -0.08 ? "amber" : "green") : ""),
     tile("累计收益(模拟)", mult != null ? fmtPct(mult - 1, 0) : "—",
-      mult != null ? `${esc(pmWin)} 区间总涨幅(已含滑点与手续费 · 初始资金 ${fmtMoney(st.starting_balance)} 起)` : "净值历史不足",
+      mult != null ? `账户口径: 初始资金 $${fmtMoney(st.starting_balance)} → 当前净值 $${fmtMoney(st.equity)}`
+        + (pm && pm.first ? ` · 曲线区间 ${esc(pmWin)}(${fmtMoney(pm.first)} → ${fmtMoney(pm.last)})` : "")
+        : "净值历史不足",
       mult != null ? (mult >= 1 ? "green" : "red") : ""),
     tile("最新信号", sig.date || "—",
       sig.rows ? `${sig.rows} 只候选` : "尚未生成", sig.date ? "green" : "amber"),
   ];
 
-  let html = `<div class="grid tiles">${tiles.join("")}</div>
+  const healedNote = st.ledger_healed
+    ? `<p class="dim warn">⚠ 本次加载发现模拟账户与真实台账对不上(旧版导入漏了历史卖出台账, 或导入后 data/sales.csv 又记了新卖出),已按 data/sales.csv 重建现金/流水/资金曲线 —— 曲线区间回到台账起点 ${esc(st.ledger_start || "—")}。持仓与 data/holdings.csv 不一致时(你按信号调过仓)不会自动同步, 需点「重置」后重新「同步真实账户」。</p>`
+    : "";
+  let html = `${healedNote}
+  <div class="grid tiles">${tiles.join("")}</div>
   <div class="grid tiles">${mTiles.join("")}</div>
   <div class="card"><h3>账户操作(纸上交易 · 不连券商)</h3>
     <div class="form-grid inline">
@@ -88,20 +95,28 @@ async function renderPaper() {
     </div>
     <div class="btn-row">
       <button class="btn primary" onclick="paperInit()">初始化账户</button>
-      <button class="btn" onclick="paperImportHoldings()">同步真实持仓(holdings.csv)</button>
+      <button class="btn" onclick="paperImportHoldings()">同步真实账户(holdings+sales 台账)</button>
       <button class="btn" onclick="paperRebalance()">按最新信号调仓</button>
       <button class="btn" onclick="paperSettle()">结算(标记市值)</button>
       <button class="btn danger" onclick="paperReset()">重置</button>
     </div>
-    <p class="dim">「同步真实持仓」把 data/holdings.csv(symbol/entry_date/entry_price/qty)导入模拟账户: 现金 = 初始资金 − Σ(数量×入场价),立即按最新收盘结算一次。之后可手动/按信号调仓。</p>
+    <p class="dim">「同步真实账户」把 data/holdings.csv(当前持仓)+ data/sales.csv(历史卖出台账)一并导入模拟账户: 现金 = 初始资金 − 当前持仓成本 − 历史买入 + 历史卖出回款(即初始资金 + 历史已实现盈亏 − 当前持仓成本),并按批次回放整段历史到资金曲线。重复点击同步 = 按台账重建(旧流水/旧净值点清除);持仓与 holdings 不一致时须先重置。</p>
     <p class="dim">调仓 = 卖出不在最新信号 Top-N 名单的持仓,再按现金等权买入名单内未持有者(最新面板收盘价 ± 滑点,双向手续费)。</p>
   </div>
-  <div class="card"><h3>资金曲线${(() => { const bf = (st.equity_points || []).filter(p => p.backfill); return bf.length ? ` <span class="dim" style="font-weight:normal">· 含回溯重建 ${esc(bf[0].date)} → ${esc(bf[bf.length-1].date)}(按入场日回放买入 + 面板收盘 mark-to-market, 现金按入场日回放扣减)</span>` : ""; })()}</h3><canvas id="ppEquity"></canvas></div>
+  <div class="card"><h3>资金曲线${(() => {
+      const pts = st.equity_points || [];
+      const win = pts.length ? `${esc(pts[0].date)} → ${esc(pts[pts.length - 1].date)}` : "";
+      const lg = st.ledger_start ? `${esc(st.ledger_start)}(台账起点)` : "";
+      const bf = pts.filter(p => p.backfill);
+      const bft = bf.length ? `${esc(bf[0].date)} → ${esc(bf[bf.length - 1].date)}(按入场日回放买入 + 面板收盘 mark-to-market, 现金按入场日回放扣减)` : "";
+      const miss = (st.backfill_missing_symbols || []).length;
+      return ` <span class="dim" style="font-weight:normal">· ${lg}${lg && win ? " · " : ""}${win}${st.history_lots ? ` · 台账 ${st.history_lots} 笔批次` : ""}${bf.length ? ` · 回溯 ${bft}` : ""}${miss ? ` · ⚠ ${miss} 只标的无行情(市值未计入)` : ""}</span>`;
+    })()}</h3><canvas id="ppEquity"></canvas></div>
   <div class="grid two">
     <div class="card"><h3>持仓</h3><div id="ppPos"></div></div>
     <div class="card"><h3>成交流水(最近 50 笔)</h3><div id="ppTrades"></div></div>
   </div>
-  <div class="card"><h3>券商卖出台账(data/sales.csv · src/sales_book.py 记账)</h3><div id="ppRealLedger"></div></div>`;
+  <div class="card"><h3>券商卖出台账(data/sales.csv · research_pkg/sales_book.py 记账)</h3><div id="ppRealLedger"></div></div>`;
 
   el.innerHTML = html;
 
@@ -165,10 +180,12 @@ async function paperInit() {
   } catch (e) { toast(e.message, false); }
 }
 async function paperImportHoldings() {
-  if (!confirm("从 data/holdings.csv 导入真实持仓到模拟账户?\n\n导入前账户必须为空(无持仓)。")) return;
+  if (!confirm("从 data/holdings.csv + data/sales.csv 导入真实账户到模拟账户?\n\n含历史卖出台账的现金回放;将按台账重建流水与净值曲线。")) return;
   try {
     const r = await api("/api/paper/import-holdings", { method: "POST", body: JSON.stringify({ starting_balance: parseFloat($("#ppInit").value) || 100000 }) });
-    let msg = `已导入 ${r.n_positions} 个持仓,净值 $${fmtMoney(r.equity)} (${esc(r.date)})`;
+    let msg = `已导入 ${r.n_positions} 个持仓`;
+    if (r.history_lots) msg += ` + ${r.history_lots} 笔历史台账(已实现 $${fmtMoney(r.history_realized)})`;
+    msg += `,净值 $${fmtMoney(r.equity)} (${esc(r.date)})`;
     if (r.shortfall > 0) msg += ` ⚠ 初始资金不足,现金已归 0(缺口 $${fmtMoney(r.shortfall)})`;
     toast(msg);
     renderPaper();
